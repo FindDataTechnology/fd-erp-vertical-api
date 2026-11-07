@@ -1,0 +1,47 @@
+# fd-erp-vertical-api — ERP 纵向 REST 服务面（serve-erp-vertical-api 1.1）
+#
+# 构建上下文约定：**上下文必须同时含两个同级包目录**（本包依赖的模板包不在 PyPI）：
+#   <context>/fd-erp-vertical-templates/   ← 模板层（主数据/取价/编排/履约/报表）
+#   <context>/fd-erp-vertical-api/         ← 本包
+# 出片：fd-build-snapshot <快照源> -R <出片仓> \
+#         --dockerfile fd-erp-vertical-api/Dockerfile --context .
+#
+# 纪律（docs/IMAGE-RELEASE.md）：上游源即默认（不引国内镜像源）、单层 <300MB、
+# 非 root 运行；探针打 /health（见 fd_erp_vertical_api/app.py 的 HEALTH_PATHS）。
+
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# 1) 模板层先装（独立一层：变更频率低于本包，重建可复用缓存）
+COPY fd-erp-vertical-templates /opt/fd-erp-vertical-templates
+RUN pip install --no-cache-dir /opt/fd-erp-vertical-templates
+
+# 2) 运行时依赖显式列出（**不要**依赖 `pip install .` 的依赖解析：本包 pyproject
+#    把 fd-erp-vertical-templates 记为普通依赖，走解析会去 PyPI 找不存在的包）。
+#    fastmcp 必须显式装：McpKernelClient 懒导入它，而它在模板包里只是 dev extra
+#    —— 漏装的表现是 ERP_KERNEL_TRANSPORT=mcp 下第一次调用才 ImportError。
+RUN pip install --no-cache-dir "fastapi>=0.110" "uvicorn>=0.29" "fastmcp>=2"
+
+# 3) 本包（--no-deps：依赖已在上面装齐，只装包体与 CLI 入口）
+COPY fd-erp-vertical-api/pyproject.toml fd-erp-vertical-api/README.md ./
+COPY fd-erp-vertical-api/fd_erp_vertical_api ./fd_erp_vertical_api
+RUN pip install --no-cache-dir --no-deps .
+
+# 4) 非 root + 事件档目录（PVC 挂载点；serve-erp-vertical-api D2）
+RUN useradd --create-home --uid 10001 appuser \
+ && mkdir -p /data && chown -R appuser:appuser /app /data
+USER appuser
+
+ENV ERP_API_DATA_DIR=/data
+EXPOSE 8100
+
+# 探针只用标准库（slim 镜像没有 curl）；/health 免租户闸，否则 Pod 永远不 Ready
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=2)"]
+
+CMD ["fd-erp-vertical-api", "serve", "--host", "0.0.0.0", "--port", "8100"]
