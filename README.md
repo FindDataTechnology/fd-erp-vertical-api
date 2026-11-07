@@ -139,7 +139,7 @@ ERP_LEDGER_DATABASE_URL=... .venv/bin/python -m pytest tests/ -q
 # 缺省读 secrets/erp-demo.env 并把库名 erp_demo→erp_test_b（口令绝不打印）
 ```
 
-18 用例（12 UE + 6 三面）：pagesets 授权形状对齐 → 商品检索/详情（池过滤+库存
+26 用例（14 UE + 12 三面/履约触发）：pagesets 授权形状对齐 → 商品检索/详情（池过滤+库存
 可见性）→ 进货单 → 取价试算（额度预估）→ 下单（信用占用真记账）→ 查单/越域
 404 → 履约（handoff_pending → plan → view）→ 对账单确认门（pending→confirmed）→
 异议处置车道 → 跨租户 403 → fail-closed 无授权 403 → grant 缺失 403 →
@@ -151,6 +151,25 @@ SP 面：推送可见域 → 接单（重复裁决 409、拒单须 note）→ �
 CP 面：运单域 → 承运回执 → 月台（预留/改约/取消）→ 提货打卡 → 正常/异常 POD
 （异常进处置车道）→ 事件流 → dock-slots/运费单 501；
 分页/统一壳/租户闸对三面同壳复验。
+
+## 演示数据（四页面集要看得见东西）
+
+```bash
+# 在服务容器内跑（ERP_TENANT_ID / ERP_API_DATA_DIR 已在 envFrom 里）
+python3 scripts/seed_demo.py            # 幂等：主数据 + 演示单据（采购单/订单/计划/运单）
+python3 scripts/seed_demo.py --check    # 只报现状，不写
+python3 scripts/seed_demo.py --no-docs  # 只建客户/供应商/商品/商品池
+```
+
+脚本按 `code`/名称判存在，**重复跑零新增**（事件档 append-only，首灌当天实测
+35 行 → 35 行）。建档走确认车道，不直接写档。三个易错点已固化进去：档闸认
+**entity_id 不认 code**；商品必须挂在 `authorized` 商品池里客户才看得见；
+SE 归属靠客户档 `sales_rep` = 会话邮箱。
+
+信用额度不在脚本里（属内核库）：用 `fd-erp-ledger-mcp set-credit-limit
+--customer <entity_id> --limit-amount 100000 --source-ref seed-demo`，在内核容器执行。
+身份绑定表（会话 → 客户/供应商/承运商）在 `fd-infra-deploy` 的
+`erp-identity-bindings` ConfigMap，subPath 挂载不热更：改完须重新滚动 Deployment。
 
 ## 如实挂账
 
