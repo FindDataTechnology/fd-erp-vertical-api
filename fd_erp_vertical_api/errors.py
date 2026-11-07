@@ -54,6 +54,13 @@ ERROR_CATALOG: dict[str, ErrorCodeMeta] = {
     "CREDIT_EXCEEDED": ErrorCodeMeta(
         "CREDIT_EXCEEDED", "invalid_argument", False,
         "信用额度不足；detail 含额度明细（上限/应收余额/已占用/本次请求/可用）。", 422),
+    # 与 CREDIT_EXCEEDED 严格区分（2026-11-08 产上首现）：未登记额度是**运维前置
+    # 动作缺失**，不是「钱不够」，也不是调用方参数错——此前被兜成
+    # INVALID_ARGUMENT「信用额度 limit 非法：None」，误导排查方向。
+    "CREDIT_NOT_REGISTERED": ErrorCodeMeta(
+        "CREDIT_NOT_REGISTERED", "invalid_argument", False,
+        "该客户未在内核登记信用额度，无法受理订单；请运维登记额度（set_credit_limit）后重试。",
+        409),
     "WORKFLOW_STATE": ErrorCodeMeta(
         "WORKFLOW_STATE", "invalid_argument", False,
         "编排工作流状态不允许该操作。", 409),
