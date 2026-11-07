@@ -2,7 +2,7 @@
 
 ERP 行业垂直 **REST 服务面**（OpenSpec change `add-supply-chain-vertical` 任务 6.5）：
 UE 订货台 19 + SE 业务员台 15 + SP 供应商 13 + CP 承运商 12 契约端点 +
-pageset 授权端点（共 60 路由）。契约真源：
+pageset 授权端点（共 61 路由）。契约真源：
 `fd-erp-vertical-templates/templates/supply-chain/pagesets/{ue-commerce,se-sales,sp-supplier,cp-carrier}/api-contract.md`。
 
 ## 边界纪律（同 fd-erp-vertical-templates）
@@ -66,6 +66,7 @@ fd-erp-vertical-api check   # 自检：授权配置 + 错误码封闭集（不�
 | 下单 | GET/POST/DELETE /ue/cart(/lines) · POST /ue/cart/price-preview | 进货单=进程内暂存 UI 态（当次取价快照，非账务事实）；预览纯读不占额度 | 实现 |
 | 下单 | POST /ue/orders | orchestration.accept_order：信用校验（fail-closed `CREDIT_EXCEEDED`+占用明细）→ 取价 → 内核 reserve_credit → 订单提案（确认车道） | 实现 |
 | 查单 | GET /ue/orders · /ue/orders/{id} · /ue/orders/{id}/fulfillment | 编排层事件档 + fulfillment_view；未确认→404；已确认未编排→如实 `handoff_pending` | 实现 |
+| 履约触发 | POST /ue/orders/{id}/fulfillment | `plan_fulfillment`：移交记录 → 履约计划（直发/多仓分配）。未确认→409 `WORKFLOW_STATE`（不伪造计划）；已有计划→幂等返回 `idempotent:true`；越域→404 | 实现 |
 | 对账 | GET /ue/statements(/{id}) · POST /ue/statements/{id}/confirm | 订单按月派生 + 内核 proposal 面状态真源；确认→自平核对 proposal（pending 确认门，幂等回放）；异议→ThresholdEvaluator 处置车道 | 实现 |
 | 开票 | GET/POST /ue/invoice-requests | — | **501 NOT_IMPLEMENTED**（模板层无开票车道；金蝶 provider 无开票直连 action，见 docs/connector-onboarding-supply-chain.md §1.2） |
 | 售后 | POST/GET /ue/aftersale-requests(/{id}) | — | **501 NOT_IMPLEMENTED**（编排层无售后处置车道） |

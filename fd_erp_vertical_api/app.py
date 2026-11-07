@@ -497,6 +497,42 @@ def create_app(settings: Settings, kernel=None, *,
             })
         return ok_shell(view)
 
+    @app.post("/erp/supply-chain/v1/ue/orders/{order_id}/fulfillment")
+    async def trigger_fulfillment(order_id: str,
+                                  ctx: dict = Depends(route("order.write"))):
+        """触发履约编排（add-erp-fulfillment-trigger）：移交记录 → 履约计划。
+
+        此前 `plan_fulfillment` 只有模板层 API，REST 面没有任何入口，已确认订单
+        只能永久停在 handoff_pending（产上 CP 闭环时只能进 pod 手跑，实锤缺口）。
+
+        闸序沿用 UE 既有：租户 → 页面集 → grant(order.write) → 客户数据域。
+        状态门如实：无移交记录 = 订单未确认 → 409 WORKFLOW_STATE，不伪造计划。
+        幂等：已有计划直接回既有视图（`plan_fulfillment` 每次生成新 ref，重复
+        调用会堆重复的直发/出库指令），带 `idempotent: true`。
+        """
+        _owned_order(order_id, ctx["customer_id"])  # 越域 404，不泄露存在性
+        d = app.state.drivers
+        try:
+            view = d.fulfillment.fulfillment_view(order_id)
+            return ok_shell({**view, "idempotent": True})
+        except TemplateError as exc:
+            if exc.code != "NOT_FOUND":
+                raise
+        handoff = next((e for e in d.orders._events()
+                        if e.get("record") == "fulfillment_handoff"
+                        and (e.get("payload") or {}).get("order_ref") == order_id),
+                       None)
+        if handoff is None:
+            raise ApiError("WORKFLOW_STATE",
+                           f"订单未确认，不产生履约移交：{order_id}",
+                           detail={"orderId": order_id,
+                                   "hint": "订单须经确认车道确认后才会移交履约编排"})
+        payload = handoff.get("payload") or {}
+        d.fulfillment.plan_fulfillment(
+            handoff["ref"], order_id, str(payload.get("customer_id") or ""),
+            payload.get("lines") or [], requested_by=ctx["customer_id"])
+        return ok_shell(d.fulfillment.fulfillment_view(order_id))
+
     # ---- 4) 对账域（grant: statement.confirm）----
 
     @app.get("/erp/supply-chain/v1/ue/statements")
