@@ -1,5 +1,5 @@
 """FastAPI 应用工厂：UE 订货台 19 + SE 业务员台 15 + SP 供应商 13 + CP 承运商
-12 契约端点 + pageset 授权端点（共 60 路由）。
+12 契约端点 + pageset 授权端点 + 2 条契约外对账支撑入口（共 63 路由）。
 
 请求闸序（每请求）：
 1. 租户闸：X-ERP-Tenant 必带且须等于本进程绑定租户（跨租户 TENANT_DENIED 403）；
@@ -30,7 +30,7 @@ from .drivers import build_drivers, stock_visibility
 from .envelope import error_shell, list_shell, ok_shell, parse_page_params
 from .errors import ApiError, adapt_exception, http_status_for
 from .faces import register_cp_face, register_se_face, register_sp_face
-from .kernel_client import build_kernel_client
+from .kernel_client import build_kernel_client, ensure_recon_proxy
 from .pagesets import PagesetAuth, load_pageset_auth, require_grant
 from .statements import StatementService
 
@@ -39,6 +39,62 @@ TENANT_HEADER = "X-ERP-Tenant"
 CUSTOMER_HEADER = "X-ERP-Customer"
 # 探针路径：不走租户闸（见 tenant_gate 注释）
 HEALTH_PATHS = ("/health", "/healthz")
+#: 对账入口单侧记录上限：内核对齐在内存里做（单副本进程），防止一次请求打爆
+RECON_MAX_RECORDS = 5000
+#: 内核不可达时的规划车道（spec erp-operations-hardening：如实 501 + 车道，而非 500）
+RECON_KERNEL_LANE = (
+    "planned_lane: 内核 run_reconciliation 已接通并优先使用（两源 inline 代理）；"
+    "内核不可达期间本入口如实 501，恢复后同一入口自动可用，调用方无需改"
+    "（optimize-erp-solution 6.6）")
+
+
+def _recon_source(side: str, spec: Any) -> dict[str, Any]:
+    """对账源声明白名单：只放 inline。
+
+    为什么拒 csv/api：内核适配器支持 `api`（服务端 GET 任意 URL）与 `csv`
+    （`file:` 前缀读服务端文件）。那是内核内部工具面的能力，**不是**该 REST
+    入口该有的能力——把它透传给客户等于开 SSRF 与本地文件读取。平台连接器
+    （金蝶/客户 WMS）走连接器仓车道，也不经这里。
+    """
+    if not isinstance(spec, dict):
+        raise ApiError("INVALID_ARGUMENT", f"{side} 须为对象（源声明）",
+                       detail={"side": side})
+    kind = str(spec.get("type") or "inline")
+    if kind != "inline":
+        raise ApiError(
+            "INVALID_ARGUMENT", f"{side} 源类型 {kind} 不在本入口允许集",
+            detail={"side": side, "type": kind, "allowed": ["inline"],
+                    "planned_lane": "planned_lane: 平台连接器（金蝶/客户 WMS）"
+                                    "与 CSV/API 源归连接器仓与模板仓车道；本入口"
+                                    "只代理内联两源，不代客户在服务端拉外部地址"})
+    records = spec.get("records")
+    if not isinstance(records, list):
+        raise ApiError("INVALID_ARGUMENT", f"{side}.records 须为数组",
+                       detail={"side": side})
+    if len(records) > RECON_MAX_RECORDS:
+        raise ApiError("INVALID_ARGUMENT",
+                       f"{side}.records 超过单次上限 {RECON_MAX_RECORDS}",
+                       detail={"side": side, "records": len(records),
+                               "limit": RECON_MAX_RECORDS})
+    for i, rec in enumerate(records):
+        if not isinstance(rec, dict):
+            raise ApiError("INVALID_ARGUMENT", f"{side}.records[{i}] 须为对象",
+                           detail={"side": side, "index": i})
+    return {"type": "inline", "records": records}
+
+
+def _recon_degraded(exc: ApiError) -> ApiError:
+    """内核不可用 → 501 + planned_lane（spec 明示；不用 500、不伪造结果）。
+
+    NOT_WIRED（内核包/工具未上线）与 UPSTREAM_UNAVAILABLE（连接不可达）都归
+    「能力当前不可用」；其余错误码（400/403/404/500）原样透出，保持语义可诊断。
+    """
+    if exc.code in ("NOT_WIRED", "UPSTREAM_UNAVAILABLE"):
+        return ApiError("NOT_IMPLEMENTED",
+                        f"内核对账引擎当前不可用（{exc.code}）：{exc.message}",
+                        detail={"planned_lane": RECON_KERNEL_LANE,
+                                "kernel_code": exc.code})
+    return exc
 
 
 def _err_response(exc: ApiError) -> JSONResponse:
@@ -100,7 +156,8 @@ def create_app(settings: Settings, kernel=None, *,
     app = FastAPI(title="fd-erp-vertical-api", version="0.1.0",
                   description="ERP 行业垂直 REST 服务面（UE 订货台）")
     app.state.settings = settings
-    app.state.kernel = kernel or build_kernel_client(settings)
+    # 对账两方法统一收口（两种 transport 的错误语义一致；见 kernel_client.ReconProxy）
+    app.state.kernel = ensure_recon_proxy(kernel or build_kernel_client(settings))
     app.state.pageset_auth = pageset_auth or load_pageset_auth(
         inline_json=settings.pageset_auth_json,
         file_path=settings.pageset_auth_file)
@@ -569,6 +626,51 @@ def create_app(settings: Settings, kernel=None, *,
                 ctx["customer_id"], statement_id))
         return ok_shell(app.state.statements.dispute(
             ctx["customer_id"], statement_id, str(body.get("disputeNote") or "")))
+
+    # ---- 4b) 对账任务代理（grant: statement.confirm；内核长任务 task_id + 轮询）----
+    #
+    # 为什么放在 UE 对账域：契约里对账单确认门的上游就是「内核自平核对」
+    # （api-contract §4 与各面 planned_lane 同口径），statement.confirm 本来就是
+    # 「有权看对账数字」的权限码；新开一个 grant 码要改 paas registry（另一个仓），
+    # 而这里不想为一个代理入口扩权限语义。故这两条是**契约外对账支撑入口**，
+    # 不计入 19 条契约端点，客户 App 不消费，对账工作台/运维调用。
+    #
+    # 形态是「提交即返回 task_id，报告靠轮询」：内核 recon/engine.py 本来就是
+    # queued + 后台线程 + 落库态，HTTP 同步等待只会把长任务超时搬到 REST 面
+    # （design D13 已否掉同步代理）。
+
+    @app.post("/erp/supply-chain/v1/ue/reconciliations", status_code=202)
+    async def create_reconciliation(body: dict[str, Any],
+                                    ctx: dict = Depends(route("statement.confirm"))):
+        """提交两源对账：202 + task_id；用 poll_url 查状态与差异。"""
+        left = _recon_source("left_source", body.get("left_source"))
+        right = _recon_source("right_source", body.get("right_source"))
+        retry = str(body.get("retry_task_id") or "").strip() or None
+        try:
+            out = app.state.kernel.run_reconciliation(left, right,
+                                                      retry_task_id=retry)
+        except ApiError as exc:
+            raise _recon_degraded(exc) from exc
+        out = out if isinstance(out, dict) else {"result": out}
+        # 内核工具面会给结果盖 ok/rows_returned 戳；放进 data 会造成「data.ok」歧义
+        task = {k: v for k, v in out.items() if k not in ("ok", "rows_returned")}
+        task_id = str(task.get("task_id") or "")
+        return ok_shell({
+            **task,
+            "poll_url": f"/erp/supply-chain/v1/ue/reconciliations/{task_id}",
+            "note": "长任务：内核后台执行，本响应不等结果；按 poll_url 轮询"
+                    "状态/进度/四类差异。零外部写入（只读滩头）。",
+        })
+
+    @app.get("/erp/supply-chain/v1/ue/reconciliations/{task_id}")
+    async def get_reconciliation(task_id: str,
+                                 ctx: dict = Depends(route("statement.confirm"))):
+        """按 task_id 查对账报告（queued/running/done/failed/interrupted）。"""
+        try:
+            report = app.state.kernel.get_recon_report(task_id)
+        except ApiError as exc:
+            raise _recon_degraded(exc) from exc
+        return ok_shell(report)
 
     # ---- 5) 开票域（grant: invoice.write）—— 后端能力未就绪，如实 501 ----
 

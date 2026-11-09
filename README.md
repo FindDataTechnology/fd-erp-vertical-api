@@ -2,7 +2,7 @@
 
 ERP 行业垂直 **REST 服务面**（OpenSpec change `add-supply-chain-vertical` 任务 6.5）：
 UE 订货台 19 + SE 业务员台 15 + SP 供应商 13 + CP 承运商 12 契约端点 +
-pageset 授权端点（共 61 路由）。契约真源：
+pageset 授权端点 + 2 条契约外对账支撑入口（共 63 路由）。契约真源：
 `fd-erp-vertical-templates/templates/supply-chain/pagesets/{ue-commerce,se-sales,sp-supplier,cp-carrier}/api-contract.md`。
 
 ## 边界纪律（同 fd-erp-vertical-templates）
@@ -75,6 +75,27 @@ fd-erp-vertical-api check   # 自检：授权配置 + 错误码封闭集（不�
 说明，禁止假实现。AI 助手入口按契约 §7 无独立端点（复用底座 chat/WS 面）。
 WS 事件面（订单状态推送/确认门回执）属底座通道接入，随 paas P1 逐页联调，挂账。
 
+### 契约外：对账任务代理（optimize-erp-solution 6.6）
+
+| 端点 | 形态 | 说明 |
+|---|---|---|
+| POST /ue/reconciliations | **202 + task_id** | 两源对账提交（源声明只放 `inline`）；内核后台线程执行，不在 HTTP 里等结果 |
+| GET /ue/reconciliations/{task_id} | 状态/进度/四类差异 | 轮询报告；未知任务 404，内核不可达 501 + `planned_lane` |
+
+这两条**不计入 19 条契约端点**（客户 App 不消费，对账工作台/运维调用），权限沿用
+`statement.confirm`（契约里对账单确认门的上游就是内核自平核对，语义同源）。
+源类型只允许 `inline`：内核的 `api`/`csv` 适配器会服务端拉任意 URL / 以 `file:`
+读服务端文件，透传给客户面等于开 SSRF 与本地文件读取。
+
+**通道结论（6.6）**：内核对账工具本身就是「提交即返回 task_id + `get_recon_report`
+轮询」的长任务形态（`recon/engine.py`：写 queued 行 → daemon 线程 → 落库态可查），
+所以走**任务化代理**，不做同步等待（design D13 已否掉同步代理：HTTP 同步必然超时）。
+两种 transport 的错误语义由 `kernel_client.ReconProxy` 收口——MCP 形态下内核
+`@safe_tool` 把失败包成 `{"ok": false, "error": …}` **返回**，不翻信封就会把 404
+当 200 数据吐出去、把连接失败当 500；实测（本地起内核 MCP 面 + 本例 REST 面）：
+内核在 → `202 task_id` → 轮询 `done`（四类差异、`external_writes=0`）；
+内核停 → `501 NOT_IMPLEMENTED` + `planned_lane`；未知任务 → `404 NOT_FOUND`。
+
 ## 端点覆盖（SE 业务员台，契约 15 条）
 
 | 域 | 端点 | 数据源 | 状态 |
@@ -117,6 +138,22 @@ WS 事件面（订单状态推送/确认门回执）属底座通道接入，随 
 计数：**实现 8/12；501 如实 4/12**。
 
 **三面合计：实现 25/40；501 如实 15/40**，全部带 `planned_lane`，禁止假实现。
+
+### 501 未接通面清单（机器可读，禁止手抄）
+
+`planned-surfaces.json` 由 `scripts/planned_surfaces.py` **从源码 AST 派生**（路由装饰器
++ `NOT_IMPLEMENTED` raise + `planned_lane` 字面量），逐条含 method / path / capability /
+domain / grant / planned_lane / source 行号。清单不要手改：
+
+```bash
+python3 scripts/planned_surfaces.py --check    # 与代码比对，零差异才退出 0（pytest 同跑）
+python3 scripts/planned_surfaces.py --write    # 改了 501 面之后回填
+```
+
+当前 **20 条**（UE 5 + SE 5 + SP 6 + CP 4）。`tasks.md` 3.7 写的「15 个」是**三面**
+（SE/SP/CP）计数，而它的括号里又列了开票/售后（UE 的 5 条）；代码实际集合是 20，
+以本清单为准。判据不含 except 块里的降级 raise（例如内核不可达时的 501 + planned_lane）：
+那说明端点本体有实现，不算未接通面。
 
 ## 统一响应壳与错误
 

@@ -21,6 +21,9 @@ dev = [
     "pytest>=8",
     "httpx>=0.27",
     "psycopg[binary]>=3.1",
+    # 内核包（sys.path 引入，未进打包依赖）自 optimize-erp-solution 6.1 起在 import
+    # 时就需要 prometheus_client；这里显式声明，否则「本地能跑 = CI 能跑」不成立。
+    "prometheus_client>=0.20",
 ]
 # 生产 MCP 形态的运行时依赖：McpKernelClient 懒导入 fastmcp
 # （ERP_KERNEL_TRANSPORT=mcp）。模板包只把它列为 dev extra，故本包显式声明，
