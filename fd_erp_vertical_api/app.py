@@ -31,6 +31,7 @@ from .envelope import error_shell, list_shell, ok_shell, parse_page_params
 from .errors import ApiError, adapt_exception, http_status_for
 from .faces import register_cp_face, register_se_face, register_sp_face
 from .kernel_client import build_kernel_client, ensure_recon_proxy
+from .observability import instrument_middleware
 from .pagesets import PagesetAuth, load_pageset_auth, require_grant
 from .statements import StatementService
 
@@ -39,6 +40,10 @@ TENANT_HEADER = "X-ERP-Tenant"
 CUSTOMER_HEADER = "X-ERP-Customer"
 # 探针路径：不走租户闸（见 tenant_gate 注释）
 HEALTH_PATHS = ("/health", "/healthz")
+# 指标路径：同样不走租户闸。理由与探针同源但不同：/metrics 是**进程级观测面**
+# （请求数/耗时/错误码，见 observability.py），不含任何业务数据、不出现租户标识；
+# 若过租户闸，集群内抓取器（无业务身份）会一律 401，指标永远无人可读。
+METRICS_PATH = "/metrics"
 #: 对账入口单侧记录上限：内核对齐在内存里做（单副本进程），防止一次请求打爆
 RECON_MAX_RECORDS = 5000
 #: 内核不可达时的规划车道（spec erp-operations-hardening：如实 501 + 车道，而非 500）
@@ -172,7 +177,7 @@ def create_app(settings: Settings, kernel=None, *,
         # 探针豁免：/health 是给 k8s readiness/liveness 用的，探针不带任何业务
         # 身份（没有 X-ERP-Tenant），若一并过租户闸，Pod 永远不会 Ready。
         # 该端点只回服务名与承载形态，不碰任何业务数据、不泄露租户标识。
-        if request.url.path in HEALTH_PATHS:
+        if request.url.path in HEALTH_PATHS or request.url.path == METRICS_PATH:
             return await call_next(request)
         try:
             requested = request.headers.get(TENANT_HEADER)
@@ -232,6 +237,18 @@ def create_app(settings: Settings, kernel=None, *,
         """
         return {"ok": True, "service": "fd-erp-vertical-api",
                 "kernel_transport": settings.kernel_transport}
+
+    @app.get(METRICS_PATH, include_in_schema=False)
+    async def metrics():
+        """运行指标：prometheus 文本，纯内存、零数据库往返（optimize-erp-solution 6.1）。
+
+        暴露面纪律：只绑集群内地址、不挂公网 Ingress（清单侧约束）。指标不带租户明文
+        ——本服务一进程一租户，租户是常量，进标签只会虚高基数。
+        """
+        from .observability import metrics_content_type, render_metrics
+        from fastapi.responses import Response
+
+        return Response(content=render_metrics(), media_type=metrics_content_type())
 
     @app.get("/erp/supply-chain/v1/pagesets")
     async def list_pagesets():
@@ -720,6 +737,11 @@ def create_app(settings: Settings, kernel=None, *,
                      app.state.pageset_auth)
     register_cp_face(app, settings, app.state.drivers, app.state.kernel,
                      app.state.pageset_auth)
+
+    # 请求计数（路由模板级，见 observability.py）。**必须最后注册**：Starlette 的
+    # @app.middleware 是「后注册者在最外层」，放早了会被租户闸包在内侧，于是被闸
+    # 拒掉的请求（401/403）根本到不了这里——而「被拒」恰恰是最该看的信号。
+    instrument_middleware(app)
 
     return app
 
