@@ -28,7 +28,10 @@ RUN pip install --no-cache-dir /opt/fd-erp-vertical-templates
 #    把 fd-erp-vertical-templates 记为普通依赖，走解析会去 PyPI 找不存在的包）。
 #    fastmcp 必须显式装：McpKernelClient 懒导入它，而它在模板包里只是 dev extra
 #    —— 漏装的表现是 ERP_KERNEL_TRANSPORT=mcp 下第一次调用才 ImportError。
-RUN pip install --no-cache-dir "fastapi>=0.110" "uvicorn>=0.29" "fastmcp>=2"
+#    prometheus_client 同理（2026-11-10 实锤）：/metrics 的 observability.py 在模块顶层
+#    import 它，而 pyproject 只把它列在 dev extra —— 漏装的表现是**整个进程启动即
+#    ModuleNotFoundError**（比 fastmcp 更狠，不是懒加载），Pod 直接 CrashLoop。
+RUN pip install --no-cache-dir "fastapi>=0.110" "uvicorn>=0.29" "fastmcp>=2" "prometheus_client>=0.20"
 
 # 3) 本包（--no-deps：依赖已在上面装齐，只装包体与 CLI 入口）
 COPY fd-erp-vertical-api/pyproject.toml fd-erp-vertical-api/README.md ./
