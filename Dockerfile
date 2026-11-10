@@ -3,8 +3,11 @@
 # 构建上下文约定：**上下文必须同时含两个同级包目录**（本包依赖的模板包不在 PyPI）：
 #   <context>/fd-erp-vertical-templates/   ← 模板层（主数据/取价/编排/履约/报表）
 #   <context>/fd-erp-vertical-api/         ← 本包
-# 出片：fd-build-snapshot <快照源> -R <出片仓> \
-#         --dockerfile fd-erp-vertical-api/Dockerfile --context .
+# 出片（⚠ 不能直接拿本仓或工作区当快照源：fd-build-snapshot 只吃 git 仓且必须显式 --ref，
+# 而工作区根不是 git 仓；直接以本仓为源会报
+# `failed to compute cache key: "/fd-erp-vertical-api/fd_erp_vertical_api": not found`）：
+#   需先做「双包 vendor 快照源」——两个包并排 clone 进一个临时 git 仓，提交后出片。
+#   完整命令与坑见 fd-infra-deploy/docs/erp-image-build.md。
 #
 # 纪律（docs/IMAGE-RELEASE.md）：上游源即默认（不引国内镜像源）、单层 <300MB、
 # 非 root 运行；探针打 /health（见 fd_erp_vertical_api/app.py 的 HEALTH_PATHS）。
