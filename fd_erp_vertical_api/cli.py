@@ -35,7 +35,10 @@ def serve(host: str, port: int) -> None:
     }, ensure_ascii=False))
     from .app import create_app
     app = create_app(settings)
-    uvicorn.run(app, host=host, port=port)
+    # access_log=False：逐请求访问日志统一由 logs.py 的 JSON 行承担（默认只记失败）。
+    # 保留 uvicorn 那份的话，每个请求会写两遍，而且探针每 10s 一次的 200 照样落盘——
+    # 「errors 档 = 正常流量零日志行」就成了假话（2026-11-11 上产后实测发现）。
+    uvicorn.run(app, host=host, port=port, access_log=False)
 
 
 @cli.command("check")

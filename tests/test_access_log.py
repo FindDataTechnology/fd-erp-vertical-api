@@ -198,3 +198,27 @@ def test_redaction_vectors(payload, forbidden, required):
         assert needle not in text, (payload, text)
     for needle in required:
         assert needle in text, (payload, text)
+
+
+def test_serve_turns_off_uvicorn_access_log(monkeypatch, tmp_path):
+    """uvicorn 自带的 access log 必须关掉。
+
+    不关的话每个请求写两遍，而且 `/health` 探针每 10s 一次的 200 照样落盘——
+    「errors 档 = 正常流量零日志行」就成假话（2026-11-11 上产后实测撞到）。
+    """
+    import uvicorn
+    from click.testing import CliRunner
+
+    from fd_erp_vertical_api import cli as cli_mod
+
+    seen: dict = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(kw))
+    monkeypatch.setattr(
+        cli_mod.Settings, "from_env",
+        classmethod(lambda cls: cli_mod.Settings(
+            tenant_id="t1", database_url="postgresql://x/y",
+            data_dir=str(tmp_path / "data"))))
+
+    result = CliRunner().invoke(cli_mod.cli, ["serve", "--host", "127.0.0.1", "--port", "8100"])
+    assert result.exit_code == 0, result.output
+    assert seen.get("access_log") is False, seen
