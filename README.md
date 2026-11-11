@@ -36,7 +36,29 @@ fd-erp-vertical-api check   # 自检：授权配置 + 错误码封闭集（不�
 `ERP_API_DATA_DIR`（模板层 JSONL 事件档目录）、`ERP_KERNEL_TRANSPORT`
 （`inprocess` 缺省 / `mcp`）、`ERP_KERNEL_URL`（mcp 形态）、
 `ERP_PAGESET_AUTH`（内联 JSON）或 `ERP_PAGESET_AUTH_FILE`（文件）、
-`ERP_WMS_SNAPSHOT_FILE`（WMS 快照 JSON，缺省无快照源如实降级）。
+`ERP_WMS_SNAPSHOT_FILE`（WMS 快照 JSON，缺省无快照源如实降级）、
+`ERP_ACCESS_LOG`（访问日志档位，见下节）。
+
+## 访问日志（被拒的请求可归因）
+
+一行一个 JSON 写 stdout（容器日志即采集面，不新增落盘形态），信封
+`ts`/`event`/`tenant_hash` 与内核同构。字段：`request_id` `method` `route`
+`status` `dur_ms` `code` `hint` `detail_keys` `grant`。
+
+| 档位 | 行为 |
+|---|---|
+| `errors`（缺省） | 只写 `status>=400` 或带业务码的响应；正常下单零日志行 |
+| `all` | 逐请求全量（**含 `/health` 探针与 `/metrics` 抓取**，仅调试用，别常开） |
+| `off` | 关 |
+
+纪律：路径记**路由模板**（`/ue/orders/{id}`，不记原始单号）；租户只落 12 位
+sha256（跨租户被拒时记的是请求方声称那个租户的哈希）；`detail` 只记键名
+（值里可能有客户 id/金额）；响应头回传 `X-Request-Id`（调用方带来的合格值原样
+保留），客户报障时可凭号定位到那一行。
+
+为什么中间件注册在最外层：租户闸拒掉的 401/403 根本不进业务路由，日志挂在
+内侧就永远记不到——而这恰恰是唯一值得逐条看的流量。业务码在错误发生处盖到
+`request.state`，中间件不解析响应体。
 
 生产形态 `ERP_KERNEL_TRANSPORT=mcp` 时经
 `fd_erp_vertical_templates.kernel_client.McpKernelClient` 调内核 MCP 工具面；
