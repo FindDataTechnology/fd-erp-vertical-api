@@ -169,6 +169,7 @@ def register_se_face(app, settings, d: Drivers, kernel,
 
     def se_route(grant: str | None):
         def _dep(request: Request) -> dict[str, Any]:
+            request.state.erp_grant = grant  # 访问日志：被 GRANT 拒时能指到哪一条
             if grant is None:  # 工作台：契约权限列=页面集授权（无独立 grant）
                 if auth.grants_of(PAGESET_SE) is None:
                     raise ApiError("PAGESET_FORBIDDEN",
@@ -580,6 +581,7 @@ def register_sp_face(app, settings, d: Drivers, kernel,
 
     def sp_route(grant: str | None):
         def _dep(request: Request) -> dict[str, Any]:
+            request.state.erp_grant = grant  # 访问日志：被 GRANT 拒时能指到哪一条
             if grant is None:  # 工作台：契约权限列=页面集授权（无独立 grant）
                 if auth.grants_of(PAGESET_SP) is None:
                     raise ApiError("PAGESET_FORBIDDEN",
@@ -894,6 +896,7 @@ def register_cp_face(app, settings, d: Drivers, kernel,
 
     def cp_route(grant: str | None):
         def _dep(request: Request) -> dict[str, Any]:
+            request.state.erp_grant = grant  # 访问日志：被 GRANT 拒时能指到哪一条
             if grant is None:  # 工作台：契约权限列=页面集授权（无独立 grant）
                 if auth.grants_of(PAGESET_CP) is None:
                     raise ApiError("PAGESET_FORBIDDEN",

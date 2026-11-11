@@ -31,6 +31,7 @@ from .envelope import error_shell, list_shell, ok_shell, parse_page_params
 from .errors import ApiError, adapt_exception, http_status_for
 from .faces import register_cp_face, register_se_face, register_sp_face
 from .kernel_client import build_kernel_client, ensure_recon_proxy
+from .logs import access_log_middleware
 from .observability import instrument_middleware
 from .pagesets import PagesetAuth, load_pageset_auth, require_grant
 from .statements import StatementService
@@ -104,6 +105,18 @@ def _recon_degraded(exc: ApiError) -> ApiError:
 
 def _err_response(exc: ApiError) -> JSONResponse:
     return JSONResponse(status_code=exc.http_status, content=error_shell(exc))
+
+
+def _note_error(request: Request, exc: ApiError) -> None:
+    """把「为什么拒」记到 request.state 上，供访问日志读取（logs.py）。
+
+    为什么不在日志中间件里解析响应体：`call_next` 拿到的是流式包装，body 不便读，
+    且逐请求反序列化 JSON 只为取一个码不划算。在错误发生地顺手盖个戳最省。
+    `detail` 只记**键名**——值里可能有客户 id、金额、单号，不该进日志。
+    """
+    request.state.error_code = exc.code
+    request.state.error_hint = exc.hint
+    request.state.error_detail_keys = sorted(exc.detail)
 
 
 def _resolve_product_ref(drivers, product_ref: str) -> dict[str, Any] | None:
@@ -190,14 +203,18 @@ def create_app(settings: Settings, kernel=None, *,
                                        "cell_tenant": settings.tenant_id})
             return await call_next(request)
         except Exception as exc:  # noqa: BLE001 统一归一化为封闭错误码
-            return _err_response(adapt_exception(exc))
+            api = adapt_exception(exc)
+            _note_error(request, api)
+            return _err_response(api)
 
     # 请求体/参数校验失败（FastAPI 默认 422）→ 统一壳 400 封闭码
     @app.exception_handler(RequestValidationError)
     async def validation_handler(request: Request, exc: RequestValidationError):
-        return _err_response(ApiError("INVALID_ARGUMENT",
-                                      "请求体/参数形态非法（须为 JSON 对象）",
-                                      detail={"errors": exc.errors()[:5]}))
+        api = ApiError("INVALID_ARGUMENT",
+                       "请求体/参数形态非法（须为 JSON 对象）",
+                       detail={"errors": exc.errors()[:5]})
+        _note_error(request, api)
+        return _err_response(api)
 
     def ue_context(request: Request) -> dict[str, Any]:
         """UE 端点统一闸：页面集 → grant → 客户身份（数据域）。"""
@@ -220,6 +237,7 @@ def create_app(settings: Settings, kernel=None, *,
         """路由工厂：把该端点所需 grant 注入 scope，供 ue_context 消费。"""
         def _dep(request: Request) -> dict[str, Any]:
             request.scope["ue_grant"] = grant
+            request.state.erp_grant = grant  # 访问日志用（被 GRANT 拒时能指到哪一条）
             return ue_context(request)
         return _dep
 
@@ -742,6 +760,9 @@ def create_app(settings: Settings, kernel=None, *,
     # @app.middleware 是「后注册者在最外层」，放早了会被租户闸包在内侧，于是被闸
     # 拒掉的请求（401/403）根本到不了这里——而「被拒」恰恰是最该看的信号。
     instrument_middleware(app)
+    # 访问日志再往外一层：它要读到**最终**状态码与业务码（403 是闸给出的，不是路由），
+    # 且要给响应补 X-Request-Id。默认只在失败时落一行（ERP_ACCESS_LOG 控制，见 logs.py）。
+    access_log_middleware(app)
 
     return app
 
