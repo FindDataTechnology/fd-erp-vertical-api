@@ -61,6 +61,32 @@ ERROR_CATALOG: dict[str, ErrorCodeMeta] = {
         "CREDIT_NOT_REGISTERED", "invalid_argument", False,
         "该客户未在内核登记信用额度，无法受理订单；请运维登记额度（set_credit_limit）后重试。",
         409),
+    # ---- 内核事件层复用码（change establish-erp-event-kernel）----
+    # semantic_class / retryable / default_hint 必须与
+    # fd_erp_ledger_mcp.error_codes.CATALOG 逐字一致（check_semantics_contract 的
+    # shared 规则按交集比对这三项）。
+    # 未登记的后果不是"少一条码"，而是 adapt_exception 里 `code not in ERROR_CATALOG`
+    # 把内核语义**塌成 INTERNAL 500**——调用方就无法区分"事件已定型、请走冲正"
+    # 与"服务炸了"。
+    "EVENT_IMMUTABLE": ErrorCodeMeta(
+        "EVENT_IMMUTABLE", "invalid_argument", False,
+        "事件已定型或字段不可改写；更正须提交冲正事件，定型前修订须走 revision 通道"
+        "（保留旧值、修订来源与时点）。", 409),
+    "EVENT_UNKNOWN_TYPE": ErrorCodeMeta(
+        "EVENT_UNKNOWN_TYPE", "invalid_argument", False,
+        "事件类型未在注册表登记（封闭集）；请先登记类型与载荷 schema，"
+        "不要以未定义语义的事实写入。", 400),
+    "EVENT_STATE": ErrorCodeMeta(
+        "EVENT_STATE", "invalid_argument", False,
+        "事件状态不允许该迁移（仅 pending→accepted/rejected、accepted→reversed）。", 409),
+    "OBJECT_CONFLICT": ErrorCodeMeta(
+        "OBJECT_CONFLICT", "invalid_argument", False,
+        "对象余额是投影产物、不可直写；或同一对象维度下出现单位冲突（kg 与 pcs 不可相加）。",
+        409),
+    "POSTING_RULE_MISSING": ErrorCodeMeta(
+        "POSTING_RULE_MISSING", "not_wired", False,
+        "该事件类型没有命中的过账规则，故未落账（不猜科目）；detail 点名缺失的规则类型"
+        "与所需科目，事件留在待补清单。", 501),
     "WORKFLOW_STATE": ErrorCodeMeta(
         "WORKFLOW_STATE", "invalid_argument", False,
         "编排工作流状态不允许该操作。", 409),
