@@ -30,6 +30,10 @@ from fd_erp_vertical_templates.wms_sync import DemoWmsAdapter, WmsSnapshotAdapte
 from .config import Settings
 from .errors import ApiError
 
+#: 内核的对象维度「显式未知」值（与内核 events.UNKNOWN / 模板层 orchestration.UNKNOWN
+#: 同一个字符串）。三处必须一致，否则同一批货记在一个维度、查在另一个维度。
+UNKNOWN_DIMENSION = "__unknown__"
+
 
 @dataclass
 class Drivers:
@@ -43,6 +47,9 @@ class Drivers:
     fulfillment: FulfillmentOrchestrator
     wms: WmsSnapshotAdapter
     disposal: ThresholdEvaluator
+    #: 内核工具面实现（形态无关）。数量面只读查询直接经它——库存余额是内核的派生
+    #: 结果，REST 面不另建一条取数路径（零旁路纪律）。
+    kernel: Any = None
 
 
 def load_wms_snapshot(path: str | None) -> list[dict[str, Any]]:
@@ -64,7 +71,8 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     pricing = PricingRuleBook(settings.tenant_id, data_dir, master)
     orders = OrderOrchestrator(settings.tenant_id, data_dir, kernel, master,
                                pricing, base_currency=settings.base_currency)
-    procurement = ProcurementOrchestrator(settings.tenant_id, data_dir, master)
+    procurement = ProcurementOrchestrator(settings.tenant_id, data_dir, master,
+                                          kernel=kernel)
     logistics = DemoLogisticsAdapter()
     wms = DemoWmsAdapter(load_wms_snapshot(settings.wms_snapshot_file))
     fulfillment = FulfillmentOrchestrator(settings.tenant_id, data_dir, master,
@@ -72,7 +80,30 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     disposal = ThresholdEvaluator(settings.tenant_id, data_dir)
     return Drivers(tenant_id=settings.tenant_id, master=master, pricing=pricing,
                    orders=orders, procurement=procurement, fulfillment=fulfillment,
-                   wms=wms, disposal=disposal)
+                   wms=wms, disposal=disposal, kernel=kernel)
+
+
+def stock_on_hand(drivers: Drivers, sku: str, *,
+                  warehouse: str | None = None,
+                  lot: str | None = None) -> dict[str, Any]:
+    """对象数量面只读查询（establish-erp-event-kernel 7.2）。
+
+    读的是内核的对象余额（数量面唯一真相），不是 WMS 快照——两者是不同事实：
+      · WMS 快照 = 外部系统的库位视图，可缺失、可落后（`stock_visibility`）；
+      · 对象余额 = 本板块自己收下的事实经事件投影出来的数量，带水位与重算校验。
+    维度缺省按 `__unknown__` 查：到货预告不带库位时库存就记在未知库位维度上，
+    这里用同一个未知值才查得到那批货（用 None 会查成空维度、答「没有」）。
+    """
+    if drivers.kernel is None:
+        raise ApiError("NOT_WIRED", "内核工具面未装配：数量面不可读")
+    dimension = {"warehouse": warehouse or UNKNOWN_DIMENSION,
+                 "lot": lot or UNKNOWN_DIMENSION}
+    out = drivers.kernel.query_object_balance("sku", sku, dimension)
+    return {"sku": sku, "dimension": dimension,
+            "quantity": out.get("quantity"), "unit": out.get("unit"),
+            "as_of_event_id": out.get("as_of_event_id"),
+            "drift": out.get("drift"),
+            "completeness": out.get("completeness")}
 
 
 def stock_visibility(drivers: Drivers, product_code: str,

@@ -169,6 +169,57 @@ class InProcessKernelClient:
                                        tenant_id=self._tenant,
                                        customer_id=customer_id)
 
+    # ---- 事件层扩展（establish-erp-event-kernel 7.1）----
+    #
+    # 与模板层的 KernelClient 协议同名同形：到货预告这类外部原始事实经这里进内核，
+    # 数量面与分录都由内核派生——REST 面不直连库表、不算金额、不猜科目。
+
+    def _events_mod(self):
+        try:
+            import fd_erp_ledger_mcp.events as events
+        except ImportError as exc:
+            raise ApiError("NOT_WIRED",
+                           "内核事件工具未上线（fail-closed，不伪造事实）",
+                           detail={"module": "fd_erp_ledger_mcp.events"}) from exc
+        return events
+
+    def ingest_event(self, event_type, stable_id, occurred_at, payload,
+                     source_ref=None, provenance=None):
+        mod = self._events_mod()
+        with self._connection() as conn:
+            return mod.append_event(
+                conn, settings=self._s, tenant_id=self._tenant,
+                event_type=event_type, stable_id=stable_id,
+                occurred_at=occurred_at, payload=payload, lane="ingest",
+                source_ref=source_ref, provenance=provenance)
+
+    def project_event(self, event_id, object_type, object_key, quantity_delta,
+                      unit, dimension=None):
+        mod = self._events_mod()
+        with self._connection() as conn:
+            return mod.project_object_event(
+                conn, tenant_id=self._tenant, event_id=event_id,
+                object_type=object_type, object_key=object_key,
+                quantity_delta=quantity_delta, unit=unit, dimension=dimension)
+
+    def query_object_balance(self, object_type, object_key, dimension=None):
+        mod = self._events_mod()
+        with self._connection() as conn:
+            return mod.query_object_balance(
+                conn, tenant_id=self._tenant, object_type=object_type,
+                object_key=object_key, dimension=dimension)
+
+    def post_event(self, event_id):
+        try:
+            import fd_erp_ledger_mcp.posting as posting
+        except ImportError as exc:
+            raise ApiError("NOT_WIRED",
+                           "内核过账工具未上线（fail-closed，不伪造分录）",
+                           detail={"module": "fd_erp_ledger_mcp.posting"}) from exc
+        with self._connection() as conn:
+            return posting.post_event(conn, settings=self._s,
+                                      tenant_id=self._tenant, event_id=event_id)
+
 
 def _is_transport_failure(exc: Exception) -> bool:
     """传输层失败（内核包缺失 / DB 连接不可达 / MCP 连接异常），与业务错误区分。"""

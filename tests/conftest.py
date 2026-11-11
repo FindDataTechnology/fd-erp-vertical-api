@@ -97,7 +97,13 @@ def reset_db(db_settings):
                     "TRUNCATE proposals, journal_entries, fx_facts, recon_reports, "
                     "recon_task_items, audit, accounts, "
                     "fee_details, billing_rules, "
-                    "credit_registry, credit_reservations RESTART IDENTITY CASCADE")
+                    "credit_registry, credit_reservations, "
+                    # 事件层七表（establish-erp-event-kernel 7.1 起 REST 面会写它们）：
+                    # 漏掉就会让上一个用例的到货事实漏进下一个用例的库存与分录。
+                    # business_events 的 TRUNCATE 由 erp.allow_maintenance 开关放行。
+                    "business_events, event_revisions, objects, object_events, "
+                    "object_balances, posting_rules, posting_links, posting_gaps "
+                    "RESTART IDENTITY CASCADE")
     with connection(db_settings) as conn:
         seed_universal_accounts(conn, TENANT)
     return db_settings

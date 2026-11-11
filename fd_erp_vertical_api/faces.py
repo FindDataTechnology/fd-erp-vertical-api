@@ -36,7 +36,7 @@ from typing import Any
 
 from fastapi import Depends, Request
 
-from .drivers import Drivers
+from .drivers import Drivers, stock_on_hand
 from .envelope import list_shell, ok_shell, parse_page_params
 from .errors import ApiError
 from .pagesets import PagesetAuth, require_grant
@@ -778,6 +778,32 @@ def register_sp_face(app, settings, d: Drivers, kernel,
             po_ref, lines, expected_day=str(body.get("expectedDay") or "") or None,
             requested_by=responded_by)
         return ok_shell(out)
+
+    @app.get("/erp/supply-chain/v1/sp/inventory")
+    async def sp_inventory(request: Request,
+                           ctx: dict = Depends(sp_route("po.read"))):
+        """库存数量面只读（establish-erp-event-kernel 7.2）。
+
+        读的是**对象投影余额**（事件派生，带水位与重算校验），不是 WMS 快照那份
+        外部库位视图——两者是不同事实，不互相冒充。
+
+        越域闸：只允许查本供应商供的商品。到货预告不带库位时库存记在未知库位维度，
+        所以 `warehouse`/`lot` 缺省按 `__unknown__` 查（与写入侧同一个值），
+        否则「刚收的货查不到」会被误读成「没收到」。
+        """
+        q = request.query_params
+        sku = (q.get("sku") or "").strip()
+        if not sku:
+            raise ApiError("INVALID_ARGUMENT", "缺 sku（商品编码）")
+        product = d.master.find_by_code("product", sku)
+        if product is None or (product.get("payload") or {}).get("supplier_id") \
+                != ctx["supplier_id"]:
+            # 不是本供应商供的货一律 404：库存是跨供应商同表的，不能靠"查到了"推断可见性。
+            raise ApiError("NOT_FOUND", "该商品不在本供应商供货范围",
+                           detail={"sku": sku})
+        warehouse = (q.get("warehouse") or "").strip() or None
+        lot = (q.get("lot") or "").strip() or None
+        return ok_shell(stock_on_hand(d, sku, warehouse=warehouse, lot=lot))
 
     # ---- 4) 对账域 —— 后端能力未就绪，如实 501 ----
 
