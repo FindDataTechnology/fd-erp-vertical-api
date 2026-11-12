@@ -724,27 +724,55 @@ def create_app(settings: Settings, kernel=None, *,
                        "直连 action；禁止假实现",
                        detail={"planned_lane": "后台审核车道 + 金蝶/线下开票通道"})
 
-    # ---- 6) 售后域（grant: aftersale.write）—— 后端能力未就绪，如实 501 ----
+    # ---- 6) 售后域（grant: aftersale.write）—— 申请受理与进度查询 ----
+    #
+    # 边界（add-aftersale-lane design D5）：申请是**流程记录**，不是入库事实。
+    # 受理只写编排档，不向事件层写任何事件——客户提出申请时货还没回来，
+    # 此时落 goods_returned 等于凭空造一次入库，撤回时还得冲正。
+    # 处置面（运营侧 accepted→processing→completed）不在本单范围，如实写在 next_action。
 
     @app.post("/erp/supply-chain/v1/ue/aftersale-requests")
     async def create_aftersale(body: dict[str, Any],
                                ctx: dict = Depends(route("aftersale.write"))):
-        raise ApiError("NOT_IMPLEMENTED",
-                       "售后流后端能力未就绪：编排层无售后处置车道（tasks 6.2 契约面"
-                       "已交付、后端未实施）；禁止假实现",
-                       detail={"planned_lane": "售后处置车道（待编排层扩展）"})
+        """售后申请受理：返回申请单号，进「已受理，等待商家处置」。"""
+        order_ref = str(body.get("orderId") or body.get("order_id")
+                        or body.get("orderRef") or "").strip()
+        if not order_ref:
+            raise ApiError("INVALID_ARGUMENT", "缺 orderId（订单引用）")
+        lines = body.get("lines")
+        if not isinstance(lines, list) or not lines:
+            raise ApiError("INVALID_ARGUMENT", "售后申请 lines 须为非空数组")
+        evidence = body.get("evidence") or body.get("attachments") or []
+        if not isinstance(evidence, list):
+            raise ApiError("INVALID_ARGUMENT", "evidence 须为引用数组（不外传二进制）")
+        d = app.state.drivers
+        out = d.aftersales.request_aftersale(
+            ctx["customer_id"], order_ref, lines,
+            str(body.get("kind") or ""),
+            evidence=[str(x) for x in evidence],
+            requested_by=f"ue:{ctx['customer_id']}")
+        return ok_shell(out)
 
     @app.get("/erp/supply-chain/v1/ue/aftersale-requests")
     async def list_aftersales(request: Request,
                               ctx: dict = Depends(route("aftersale.write"))):
-        raise ApiError("NOT_IMPLEMENTED", "售后流后端能力未就绪（同 POST）",
-                       detail={"planned_lane": "售后处置车道（待编排层扩展）"})
+        q = request.query_params
+        offset, limit = parse_page_params(q.get("offset"), q.get("limit"))
+        d = app.state.drivers
+        out = d.aftersales.aftersale_requests(
+            ctx["customer_id"],
+            status=(q.get("status") or "").strip() or None,
+            date_from=(q.get("from") or "").strip() or None,
+            date_to=(q.get("to") or "").strip() or None,
+            offset=offset, limit=limit)
+        return list_shell(out["rows"], offset=offset, limit=limit)
 
     @app.get("/erp/supply-chain/v1/ue/aftersale-requests/{request_id}")
     async def aftersale_detail(request_id: str,
                                ctx: dict = Depends(route("aftersale.write"))):
-        raise ApiError("NOT_IMPLEMENTED", "售后流后端能力未就绪（同 POST）",
-                       detail={"planned_lane": "售后处置车道（待编排层扩展）"})
+        """详情：他人单号与不存在单号同一条 404（契约 §0 不泄露存在性）。"""
+        d = app.state.drivers
+        return ok_shell(d.aftersales.aftersale_of(ctx["customer_id"], request_id))
 
     # ---- AI 助手入口：契约 §7 明确无独立 AI 端点（复用底座 chat/WS 面）----
 

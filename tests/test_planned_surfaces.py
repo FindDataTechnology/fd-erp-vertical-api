@@ -24,7 +24,9 @@ def test_planned_surfaces_list_matches_code():
 
 def test_planned_surfaces_baseline_shape():
     data = json.loads(BASELINE.read_text(encoding="utf-8"))
-    assert data["count"] == len(data["endpoints"]) == 20
+    # 总数不钉死：能力落地会让这份清单**变短**，钉死等于「实现反而让测试变红」。
+    # 真正的不变量是「清单与 AST 派生严格一致」——那由 test_planned_surfaces_matches_code 守。
+    assert data["count"] == len(data["endpoints"]) > 0
     # 逐条含路径 / 方法 / 规划车道 / 所属能力（3.7 的字段要求）
     for e in data["endpoints"]:
         assert e["path"].startswith("/erp/supply-chain/v1/")

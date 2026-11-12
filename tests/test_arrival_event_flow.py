@@ -217,7 +217,10 @@ def test_7_3_honest_501s_stay_red_after_wiring(client_faces, seeded_faces):
         .read_text(encoding="utf-8"))
     paths = {e["path"] for e in baseline["endpoints"]}
     assert "/erp/supply-chain/v1/sp/inventory" not in paths
-    assert baseline["count"] == 20  # 接线前后同为 20 条：一条都没被"变绿"
+    # 不钉总数：清单会随能力落地而变短（售后三条即如此）。真正要守的是
+    # 「实现过的端点不再出现在清单里」——上面那条断言就是它，按 路径 点名而不是按总量。
+    assert baseline["count"] == len(baseline["endpoints"]) > 0
+    assert not any("aftersale" in p_ for p_ in paths), "已实现的售后端点仍在 501 清单里"
 
     r = client_faces.get("/erp/supply-chain/v1/sp/statements",
                          headers=_h_sp("SUP-001"))

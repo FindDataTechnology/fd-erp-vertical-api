@@ -101,13 +101,15 @@ def test_grant_catalog_matches_paas_registry_union():
 
 
 def test_unimplemented_endpoints_return_501(client, seeded):
-    """契约里有、后端能力未就绪的端点如实 501 NOT_IMPLEMENTED（禁止假实现）。"""
+    """契约里有、后端能力未就绪的端点如实 501 NOT_IMPLEMENTED（禁止假实现）。
+
+    注意这份清单会随着能力落地而**变短**：售后域三条（apply/列表/详情）已随
+    `add-aftersale-lane` 实现，故不再列出——清单里留着已实现的端点，会变成
+    「实现反而让测试变红」，最后没人敢实现。
+    """
     paths = [
         ("GET", "/erp/supply-chain/v1/ue/invoice-requests", None),
         ("POST", "/erp/supply-chain/v1/ue/invoice-requests", {}),
-        ("POST", "/erp/supply-chain/v1/ue/aftersale-requests", {}),
-        ("GET", "/erp/supply-chain/v1/ue/aftersale-requests", None),
-        ("GET", "/erp/supply-chain/v1/ue/aftersale-requests/AS-1", None),
     ]
     for method, path, payload in paths:
         r = (client.get(path, headers=_h(seeded["cust1"])) if method == "GET"
