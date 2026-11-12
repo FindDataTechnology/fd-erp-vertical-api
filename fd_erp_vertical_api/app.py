@@ -28,7 +28,8 @@ from .cart import CartStore
 from .config import Settings
 from .drivers import build_drivers, stock_visibility
 from .envelope import error_shell, list_shell, ok_shell, parse_page_params
-from .errors import ApiError, adapt_exception, http_status_for
+from .errors import (ApiError, adapt_exception, http_status_for,
+                     invoice_degraded)
 from .faces import register_cp_face, register_se_face, register_sp_face
 from .kernel_client import build_kernel_client, ensure_kernel_proxy
 from .logs import access_log_middleware
@@ -99,24 +100,6 @@ def _recon_degraded(exc: ApiError) -> ApiError:
         return ApiError("NOT_IMPLEMENTED",
                         f"内核对账引擎当前不可用（{exc.code}）：{exc.message}",
                         detail={"planned_lane": RECON_KERNEL_LANE,
-                                "kernel_code": exc.code})
-    return exc
-
-
-INVOICE_KERNEL_LANE = ("内核事件层（拟稿车道 submit_event + 确认门 decide_event）："
-                       "开票申请走 draft 车道落 pending，审核由确认门拍板")
-
-
-def _invoice_degraded(exc: ApiError) -> ApiError:
-    """内核不可用 → 501 + planned_lane（与对账代理同口径，放 except 分支）。
-
-    **不放顶层**：顶层 raise 会被 `scripts/planned_surfaces.py` 识别成「规划中
-    端点」重新挂回 501 清单，而这条车道其实已实现——只是内核此刻不可达。
-    """
-    if exc.code in ("NOT_WIRED", "UPSTREAM_UNAVAILABLE"):
-        return ApiError("NOT_IMPLEMENTED",
-                        f"内核事件层当前不可用（{exc.code}）：{exc.message}",
-                        detail={"planned_lane": INVOICE_KERNEL_LANE,
                                 "kernel_code": exc.code})
     return exc
 
@@ -746,7 +729,7 @@ def create_app(settings: Settings, kernel=None, *,
                 date_from=(q.get("from") or "").strip() or None,
                 date_to=(q.get("to") or "").strip() or None)
         except ApiError as exc:
-            raise _invoice_degraded(exc) from exc
+            raise invoice_degraded(exc) from exc
         # 分页只由统一壳做一次（管道层不截断），否则 total 与 rows_returned 对不上。
         return list_shell(out["rows"], offset=offset, limit=limit,
                           extra={k: v for k, v in out.items() if k != "rows"})
@@ -759,7 +742,7 @@ def create_app(settings: Settings, kernel=None, *,
         try:
             out = d.invoices.submit_request(ctx["customer_id"], body)
         except ApiError as exc:
-            raise _invoice_degraded(exc) from exc
+            raise invoice_degraded(exc) from exc
         return ok_shell(out)
 
     # ---- 6) 售后域（grant: aftersale.write）—— 申请受理与进度查询 ----

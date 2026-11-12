@@ -38,6 +38,7 @@ from fastapi import Depends, Request
 
 from .drivers import Drivers, stock_on_hand
 from .envelope import list_shell, ok_shell, parse_page_params
+from .errors import ApiError, invoice_degraded
 from .errors import ApiError
 from .pagesets import PagesetAuth, require_grant
 
@@ -165,7 +166,14 @@ def _statement_summary(service, customer_id: str) -> dict[str, Any]:
 
 def register_se_face(app, settings, d: Drivers, kernel,
                      statements, auth: PagesetAuth) -> None:
-    """SE 业务员台 15 端点（实现 14 + 如实 501 1：仅对账单推送）。"""
+    """SE 业务员台 17 端点（实现 16 + 如实 501 1：仅对账单推送）。
+
+    两条开票审核端点（`GET/POST .../se/invoice-requests`，change:
+    add-se-invoice-audit-queue）复用 `alert.handle`：本 grant 在 SE 面守的是
+    「对一条 pending 的客户请求作处置」，开票审核是同一动作类型。未新开
+    `invoice.audit` 是为了不把 paas registry、本仓 KNOWN_GRANTS 与两处对拍
+    用例同时改一遍（既有先例：契约外对账代理复用 `statement.confirm`）。
+    """
 
     def se_route(grant: str | None):
         def _dep(request: Request) -> dict[str, Any]:
@@ -343,6 +351,76 @@ def register_se_face(app, settings, d: Drivers, kernel,
             date_to=(q.get("to") or "").strip() or None,
             offset=offset, limit=limit)
         return list_shell(out["rows"], offset=offset, limit=limit)
+
+    # ---- 2b) 开票审核队列（grant: alert.handle）----
+    #
+    # 为什么用 alert.handle：这个 grant 守的是「对一条 pending 的客户请求作处置」——
+    # 开票审核与预警处置在权限语义上是同一件事（accept/reject 一条待办）。新开
+    # `invoice.audit` 要同时改 paas registry、本仓 KNOWN_GRANTS 与两处对拍用例，
+    # 而收益只是名字更对字（既有先例：契约外对账代理复用 statement.confirm）。
+    #
+    # 边界：只审**本人名下客户**的申请；状态只经内核确认门写（本服务不存副本）；
+    # 票据本体不在这里——本端点只把「申请」从 pending 推进到 accepted/rejected。
+
+    @app.get("/erp/supply-chain/v1/se/invoice-requests")
+    async def se_list_invoice_requests(request: Request,
+                                       ctx: dict = Depends(se_route("alert.handle"))):
+        """本人客户的开票申请：默认只看 pending，`status=all` 看全部。"""
+        q = request.query_params
+        offset, limit = parse_page_params(q.get("offset"), q.get("limit"))
+        want = (q.get("status") or "").strip().lower()
+        # 默认只看待审：审核队列的第一眼应当是「还需要我做什么」。
+        # 只有显式 status=all 才放开全部状态。
+        status = None if want == "all" else (want or "pending")
+        ids = {snap["entity_id"] for snap in _owned_customers(d, ctx["staff"])}
+        try:
+            out = d.invoices.requests_for_customers(
+                ids, status=status,
+                date_from=(q.get("from") or "").strip() or None,
+                date_to=(q.get("to") or "").strip() or None)
+        except ApiError as exc:
+            raise invoice_degraded(exc) from exc
+        return list_shell(out["rows"], offset=offset, limit=limit,
+                          extra={k: v for k, v in out.items() if k != "rows"})
+
+    @app.post("/erp/supply-chain/v1/se/invoice-requests/{request_id}/decide")
+    async def se_decide_invoice_request(request_id: str, body: dict[str, Any],
+                                        ctx: dict = Depends(se_route("alert.handle"))):
+        """审核一条开票申请：accepted / rejected（驳回必附 note），只经内核确认门。"""
+        decision = str(body.get("decision") or "").strip().lower()
+        if decision not in ("accepted", "rejected"):
+            raise ApiError("INVALID_ARGUMENT",
+                           "decision 须为 accepted 或 rejected",
+                           detail={"decision": body.get("decision")})
+        note = str(body.get("note") or "").strip()
+        if decision == "rejected" and not note:
+            raise ApiError("INVALID_ARGUMENT",
+                           "驳回必须写明原因（note）——客户与运营据此处置",
+                           detail={"decision": decision})
+
+        # 归属闸：该申请必须属于本人名下客户，越域与不存在同一条 404。
+        ids = {snap["entity_id"] for snap in _owned_customers(d, ctx["staff"])}
+        try:
+            mine = d.invoices.requests_for_customers(ids)
+        except ApiError as exc:
+            raise invoice_degraded(exc) from exc
+        hit = next((r for r in mine["rows"] if r.get("requestId") == request_id), None)
+        if hit is None:
+            raise ApiError("NOT_FOUND", f"开票申请不存在：{request_id}",
+                           detail={"requestId": request_id})
+
+        try:
+            out = kernel.decide_event(request_id, decision, note=note,
+                                      lane="draft", actor="human")
+        except ApiError as exc:
+            raise invoice_degraded(exc) from exc
+        return ok_shell({
+            "requestId": request_id,
+            "status": (out or {}).get("status") or decision,
+            "customerId": hit.get("customerId"),
+            "decided_at": (out or {}).get("decided_at"),
+            "note": note or None,
+        })
 
     # ---- 3) 代客下单域（确认门 + 代理身份留痕）----
 

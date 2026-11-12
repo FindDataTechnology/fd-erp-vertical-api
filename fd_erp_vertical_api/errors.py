@@ -154,6 +154,26 @@ def http_status_for(code: str) -> int:
     return _TEMPLATE_CODE_HTTP.get(code, 500)
 
 
+#: 开票/事件层在内核不可达时的挂账车道说明（放这里是因为 app.py 与 faces.py 都要用：
+#: 同一个 helper 在两处各写一遍，迟早变成两份文案、两个判据）。
+INVOICE_KERNEL_LANE = ("内核事件层（拟稿车道 submit_event + 确认门 decide_event）："
+                       "开票申请走 draft 车道落 pending，审核由确认门拍板")
+
+
+def invoice_degraded(exc: "ApiError") -> "ApiError":
+    """内核事件层不可用 → 501 + planned_lane（与对账代理同口径）。
+
+    **必须在 except 分支里调用**：顶层 raise 会被 `scripts/planned_surfaces.py`
+    识别成「规划中端点」重新挂回 501 清单，而这条车道其实已实现、只是内核此刻不可达。
+    """
+    if exc.code in ("NOT_WIRED", "UPSTREAM_UNAVAILABLE"):
+        return ApiError("NOT_IMPLEMENTED",
+                        f"内核事件层当前不可用（{exc.code}）：{exc.message}",
+                        detail={"planned_lane": INVOICE_KERNEL_LANE,
+                                "kernel_code": exc.code})
+    return exc
+
+
 def adapt_exception(exc: Exception) -> ApiError:
     """把模板层/内核错误归一为 ApiError（保留 code/message/detail，语义不丢）。
 

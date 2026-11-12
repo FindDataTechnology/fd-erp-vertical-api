@@ -216,6 +216,19 @@ class InProcessKernelClient:
                 conn, tenant_id=self._tenant, event_type=event_type, lane=lane,
                 status=status, limit=limit, after_event_id=after_event_id)
 
+    def decide_event(self, stable_id, decision, note=None, lane="draft",
+                     actor="human"):
+        """确认门：draft 车道事件 accepted / rejected（唯一改变事件状态的人工入口）。
+
+        **只由 API 层的拍板端点调用**：模板编排层不代任何一方过门
+        （`shared/kernel-client-contract.json` 对模板仓的 note 原文）。
+        """
+        mod = self._events_mod()
+        with self._connection() as conn:
+            return mod.decide_event(
+                conn, tenant_id=self._tenant, stable_id=stable_id, lane=lane,
+                decision=decision, note=note or "", actor=actor)
+
     def project_event(self, event_id, object_type, object_key, quantity_delta,
                       unit, dimension=None):
         mod = self._events_mod()
@@ -367,6 +380,16 @@ class KernelProxy:
         except Exception as exc:  # noqa: BLE001 见 _raise_kernel_error
             _raise_kernel_error(exc, "query_events")
         return _kernel_result(out, "query_events")
+
+    def decide_event(self, stable_id, decision, note=None, lane="draft",
+                     actor="human"):
+        """拍板：同样必须收口——MCP 形态下内核拒绝会以错误信封**返回**。"""
+        try:
+            out = self._inner.decide_event(stable_id, decision, note=note,
+                                           lane=lane, actor=actor)
+        except Exception as exc:  # noqa: BLE001 见 _raise_kernel_error
+            _raise_kernel_error(exc, "decide_event")
+        return _kernel_result(out, "decide_event")
 
     def __getattr__(self, name):  # 其余工具面方法透传（不改变既有行为）
         return getattr(self._inner, name)
