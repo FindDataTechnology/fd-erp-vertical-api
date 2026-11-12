@@ -24,6 +24,7 @@ from fd_erp_vertical_templates.fulfillment import (DemoLogisticsAdapter,
 from fd_erp_vertical_templates.freight import FreightStatementLane
 from fd_erp_vertical_templates.inventory import InventoryLane
 from fd_erp_vertical_templates.masterdata import MasterData
+from fd_erp_vertical_templates.aging import ReceivableAging
 from fd_erp_vertical_templates.assets import FixedAssetLane
 from fd_erp_vertical_templates.budget import BudgetBook
 from fd_erp_vertical_templates.invoice_receipt import InvoiceReceiptLane
@@ -88,6 +89,8 @@ class Drivers:
     invoice_receipts: InvoiceReceiptLane
     #: 财务报表：试算平衡 / 利润表 / 资产负债表 / 按维度费用（全部从分录现算）。
     statements: StatementBook
+    #: 应收账龄：按客户（`customer` 维度）FIFO 核销后分桶。
+    receivables: ReceivableAging
     wms: WmsSnapshotAdapter
     disposal: ThresholdEvaluator
     #: 内核工具面实现（形态无关）。数量面只读查询直接经它——库存余额是内核的派生
@@ -147,6 +150,9 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 三表从分录现算：不建表、不缓存（资产负债表自带平衡断言）。
     statements = StatementBook(settings.tenant_id, kernel,
                                base_currency=settings.base_currency)
+    # 账龄：客户归属走 customer 维度；未标客户单列，不摊给任何客户。
+    receivables = ReceivableAging(settings.tenant_id, kernel,
+                                  base_currency=settings.base_currency)
     disposal = ThresholdEvaluator(settings.tenant_id, data_dir)
     return Drivers(tenant_id=settings.tenant_id, master=master, pricing=pricing,
                    orders=orders, aftersales=aftersales, crm=crm,
@@ -154,7 +160,7 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                    fulfillment=fulfillment, freight=freight,
                    inventory=inventory, policy=policy, cost=cost, assets=assets,
                    budget=budget, invoice_receipts=invoice_receipts,
-                   statements=statements,
+                   statements=statements, receivables=receivables,
                    wms=wms, disposal=disposal, kernel=kernel)
 
 
