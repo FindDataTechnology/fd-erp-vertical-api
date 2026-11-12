@@ -149,9 +149,9 @@ class _EnvelopeKernel:
 def test_recon_proxy_translates_mcp_error_envelope():
     """MCP 信封里的 RECON_TASK_NOT_FOUND → NOT_FOUND 404（不是 200 数据、不是 500）。"""
     from fd_erp_vertical_api.errors import ApiError
-    from fd_erp_vertical_api.kernel_client import ReconProxy
+    from fd_erp_vertical_api.kernel_client import KernelProxy
 
-    proxy = ReconProxy(_EnvelopeKernel({
+    proxy = KernelProxy(_EnvelopeKernel({
         "ok": False, "rows_returned": 0,
         "error": {"code": "RECON_TASK_NOT_FOUND", "message": "对账任务不存在：x",
                   "detail": {"task_id": "x"}}}))
@@ -167,9 +167,9 @@ def test_recon_proxy_translates_mcp_error_envelope():
 def test_recon_proxy_translates_unknown_tool_envelope():
     """内核没有该工具（未知码）→ UPSTREAM_UNAVAILABLE（REST 再降级 501），不落 500。"""
     from fd_erp_vertical_api.errors import ApiError
-    from fd_erp_vertical_api.kernel_client import ReconProxy
+    from fd_erp_vertical_api.kernel_client import KernelProxy
 
-    proxy = ReconProxy(_EnvelopeKernel({
+    proxy = KernelProxy(_EnvelopeKernel({
         "ok": False,
         "error": {"code": "UNKNOWN_TOOL", "message": "tool not found"}}))
     try:
@@ -187,8 +187,8 @@ def test_recon_proxy_passthrough_other_methods():
         def query_balance(self, **kwargs):
             return {"data": [{"account_code": "1100", "balance": "1"}]}
 
-    from fd_erp_vertical_api.kernel_client import ReconProxy
-    assert ReconProxy(_Inner()).query_balance()["data"][0]["balance"] == "1"
+    from fd_erp_vertical_api.kernel_client import KernelProxy
+    assert KernelProxy(_Inner()).query_balance()["data"][0]["balance"] == "1"
 
 
 def test_recon_proxy_classifies_wrapped_connection_error():
@@ -199,14 +199,14 @@ def test_recon_proxy_classifies_wrapped_connection_error():
     违反 spec「内核不可用 → 501」。
     """
     from fd_erp_vertical_api.errors import ApiError
-    from fd_erp_vertical_api.kernel_client import ReconProxy
+    from fd_erp_vertical_api.kernel_client import KernelProxy
 
     class _Down:
         def run_reconciliation(self, *args, **kwargs):
             raise RuntimeError("Client failed to connect: All connection attempts failed")
 
     try:
-        ReconProxy(_Down()).run_reconciliation([], [])
+        KernelProxy(_Down()).run_reconciliation([], [])
     except ApiError as exc:
         assert exc.code == "UPSTREAM_UNAVAILABLE"
     else:
@@ -215,14 +215,14 @@ def test_recon_proxy_classifies_wrapped_connection_error():
 
 def test_recon_proxy_keeps_real_bug_visible():
     """真正的实现缺陷不能被当成「内核不可用」（否则 501 掩盖 500 类 bug）。"""
-    from fd_erp_vertical_api.kernel_client import ReconProxy
+    from fd_erp_vertical_api.kernel_client import KernelProxy
 
     class _Buggy:
         def run_reconciliation(self, *args, **kwargs):
             raise TypeError("unexpected keyword argument")
 
     try:
-        ReconProxy(_Buggy()).run_reconciliation([], [])
+        KernelProxy(_Buggy()).run_reconciliation([], [])
     except TypeError as exc:
         assert "unexpected keyword" in str(exc)
     else:

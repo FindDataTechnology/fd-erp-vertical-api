@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from fd_erp_vertical_api.errors import (ERROR_CATALOG, ApiError, adapt_exception,
                                         http_status_for)
-from fd_erp_vertical_api.kernel_client import _recon_result
+from fd_erp_vertical_api.kernel_client import _kernel_result
 
 EVENT_CODES = ("EVENT_IMMUTABLE", "EVENT_UNKNOWN_TYPE", "EVENT_STATE",
                "OBJECT_CONFLICT", "POSTING_RULE_MISSING")
@@ -67,7 +67,7 @@ def test_unknown_kernel_code_still_collapses_to_internal():
 def test_recon_envelope_passes_registered_codes_and_keeps_unknown_visible():
     # 已登记：原样透出
     try:
-        _recon_result({"ok": False, "error": {"code": "POSTING_RULE_MISSING",
+        _kernel_result({"ok": False, "error": {"code": "POSTING_RULE_MISSING",
                                               "message": "缺规则", "detail": {}}}, "run")
         raise AssertionError("应当抛 ApiError")
     except ApiError as exc:
@@ -76,7 +76,7 @@ def test_recon_envelope_passes_registered_codes_and_keeps_unknown_visible():
     # 未登记：降级为 UPSTREAM_UNAVAILABLE，但 kernel_code 必须留在 detail 里，
     # 否则排查时会以为"内核没这个码"
     try:
-        _recon_result({"ok": False, "error": {"code": "BRAND_NEW_CODE",
+        _kernel_result({"ok": False, "error": {"code": "BRAND_NEW_CODE",
                                               "message": "x", "detail": {}}}, "run")
         raise AssertionError("应当抛 ApiError")
     except ApiError as exc:

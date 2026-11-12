@@ -90,10 +90,11 @@ sha256（跨租户被拒时记的是请求方声称那个租户的哈希）；`d
 | 查单 | GET /ue/orders · /ue/orders/{id} · /ue/orders/{id}/fulfillment | 编排层事件档 + fulfillment_view；未确认→404；已确认未编排→如实 `handoff_pending` | 实现 |
 | 履约触发 | POST /ue/orders/{id}/fulfillment | `plan_fulfillment`：移交记录 → 履约计划（直发/多仓分配）。未确认→409 `WORKFLOW_STATE`（不伪造计划）；已有计划→幂等返回 `idempotent:true`；越域→404 | 实现 |
 | 对账 | GET /ue/statements(/{id}) · POST /ue/statements/{id}/confirm | 订单按月派生 + 内核 proposal 面状态真源；确认→自平核对 proposal（pending 确认门，幂等回放）；异议→ThresholdEvaluator 处置车道 | 实现 |
-| 开票 | GET/POST /ue/invoice-requests | — | **501 NOT_IMPLEMENTED**（模板层无开票车道；金蝶 provider 无开票直连 action，见 docs/connector-onboarding-supply-chain.md §1.2） |
+| 开票 | GET/POST /ue/invoice-requests | 内核事件层**拟稿车道**（`submit_event` → `invoice_requested` pending）+ 确认门（`decide_event`）拍板；列表取内核投影的 `pending/accepted/rejected`，本服务不留第二份状态台账 | 实现 |
 | 售后 | POST/GET /ue/aftersale-requests(/{id}) | 售后编排事件档（`record="aftersale"`，只追加流程留痕）：申请受理 → 进度查询；申请是**流程记录**不是入库事实，不进事件层 | 实现 |
 
-计数：**实现 17/19；501 如实 2/19**（开票 2），全部带 `planned_lane`
+计数：**实现 19/19；501 0/19**。开票只做到「申请受理 + 进度」：票据本体仍走客户既有
+开票渠道（本端不代开票、不生成票据文件）；申请里的 `amount` 一律不采信，审核时按单据定。
 说明，禁止假实现。AI 助手入口按契约 §7 无独立端点（复用底座 chat/WS 面）。
 WS 事件面（订单状态推送/确认门回执）属底座通道接入，随 paas P1 逐页联调，挂账。
 
@@ -112,7 +113,7 @@ WS 事件面（订单状态推送/确认门回执）属底座通道接入，随 
 **通道结论（6.6）**：内核对账工具本身就是「提交即返回 task_id + `get_recon_report`
 轮询」的长任务形态（`recon/engine.py`：写 queued 行 → daemon 线程 → 落库态可查），
 所以走**任务化代理**，不做同步等待（design D13 已否掉同步代理：HTTP 同步必然超时）。
-两种 transport 的错误语义由 `kernel_client.ReconProxy` 收口——MCP 形态下内核
+两种 transport 的错误语义由 `kernel_client.KernelProxy` 收口——MCP 形态下内核
 `@safe_tool` 把失败包成 `{"ok": false, "error": …}` **返回**，不翻信封就会把 404
 当 200 数据吐出去、把连接失败当 500；实测（本地起内核 MCP 面 + 本例 REST 面）：
 内核在 → `202 task_id` → 轮询 `done`（四类差异、`external_writes=0`）；
@@ -164,8 +165,8 @@ WS 事件面（订单状态推送/确认门回执）属底座通道接入，随 
 
 计数：**实现 8/12；501 如实 4/12**。
 
-**四面合计（契约 59 条）：实现 46/59；501 如实 13/59**（UE 开票 2 + SE 推送 1 +
-SP 对账/发票/结算 6 + CP 月台时段/运费单 4），全部带 `planned_lane`，禁止假实现。
+**四面合计（契约 59 条）：实现 48/59；501 如实 11/59**（SE 推送 1 + SP 对账/发票/
+结算 6 + CP 月台时段/运费单 4），全部带 `planned_lane`，禁止假实现。
 
 ### 501 未接通面清单（机器可读，禁止手抄）
 
@@ -208,7 +209,7 @@ ERP_LEDGER_DATABASE_URL=... .venv/bin/python -m pytest tests/ -q
 可见性）→ 进货单 → 取价试算（额度预估）→ 下单（信用占用真记账）→ 查单/越域
 404 → 履约（handoff_pending → plan → view）→ 对账单确认门（pending→confirmed）→
 异议处置车道 → 跨租户 403 → fail-closed 无授权 403 → grant 缺失 403 →
-2×501 如实（开票）→ 分页/上限/壳/校验错误 400；
+开票申请（拟稿车道 pending → 确认门拍板 → 状态随投影变）→ 分页/上限/壳/校验错误 400；
 SE 面：工作台/名下客户/360/代客下单全链（归属越权 403 + 额度不足 422 + 代理
 身份留痕）/预警处置拍板（accept/reject）/CRM 线索池与拜访（缺纪要 400、他人客户 404、location 可选且不补默认）；
 SP 面：推送可见域 → 接单（重复裁决 409、拒单须 note）→ 发货反馈（自动到货

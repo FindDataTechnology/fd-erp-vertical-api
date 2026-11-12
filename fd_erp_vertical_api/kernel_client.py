@@ -110,7 +110,7 @@ class InProcessKernelClient:
     #
     # 错误归一（404 / 501 降级）不在本类做：MCP 形态返回的是错误信封、InProcess 形态
     # 抛 ErpError，两形态分叉会养出「测试绿、产上 500」的问题（本仓已被同类分叉咬过
-    # 两次）。统一收口见模块级 ReconProxy。
+    # 两次）。统一收口见模块级 KernelProxy。
 
     def _recon_tenant(self, tenant_id: str | None) -> str:
         """查询闸同内核工具面：跨租户请求拒绝并留痕（tenancy.resolve_tenant）。"""
@@ -193,6 +193,29 @@ class InProcessKernelClient:
                 occurred_at=occurred_at, payload=payload, lane="ingest",
                 source_ref=source_ref, provenance=provenance)
 
+    # ---- 拟稿车道与事件查询（add-invoice-request-lane）----
+    #
+    # ingest 是「外部系统报来的事实，写入即接受」；submit 是「我方替调用方拟的稿，
+    # 落 pending 等确认门拍板」。开票申请必须走后者：用 ingest 等于自动通过审核。
+
+    def submit_event(self, event_type, stable_id, occurred_at, payload,
+                     source_ref=None):
+        mod = self._events_mod()
+        with self._connection() as conn:
+            return mod.append_event(
+                conn, settings=self._s, tenant_id=self._tenant,
+                event_type=event_type, stable_id=stable_id,
+                occurred_at=occurred_at, payload=payload, lane="draft",
+                source_ref=source_ref, actor="agent")
+
+    def query_events(self, event_type=None, lane=None, status=None,
+                     limit=100, after_event_id=0):
+        mod = self._events_mod()
+        with self._connection() as conn:
+            return mod.query_events(
+                conn, tenant_id=self._tenant, event_type=event_type, lane=lane,
+                status=status, limit=limit, after_event_id=after_event_id)
+
     def project_event(self, event_id, object_type, object_key, quantity_delta,
                       unit, dimension=None):
         mod = self._events_mod()
@@ -241,7 +264,7 @@ def _is_transport_failure(exc: Exception) -> bool:
         "connection error", "connection reset", "timed out", "timeout"))
 
 
-def _raise_recon_error(exc: Exception, action: str):
+def _raise_kernel_error(exc: Exception, action: str):
     """内核异常 → REST 面封闭错误码（本函数必定抛出）。
 
     - RECON_TASK_NOT_FOUND（内核专属码）→ NOT_FOUND 404，不落成 500；
@@ -261,17 +284,17 @@ def _raise_recon_error(exc: Exception, action: str):
         raise ApiError(code, message, detail=detail) from exc
     if _is_transport_failure(exc):
         raise ApiError("UPSTREAM_UNAVAILABLE",
-                       f"内核对账引擎不可达（{type(exc).__name__}）",
-                       detail={"kernel": "recon", "action": action}) from exc
+                       f"内核不可达（{type(exc).__name__}）",
+                       detail={"kernel": "erp-ledger", "action": action}) from exc
     raise exc
 
 
-def _recon_result(out: Any, action: str) -> Any:
+def _kernel_result(out: Any, action: str) -> Any:
     """MCP 工具面失败是「错误信封」而非异常：统一翻成 ApiError（否则会当数据返回）。"""
     if isinstance(out, dict) and out.get("ok") is False:
         err = out.get("error") or {}
         code = str(err.get("code") or "INTERNAL")
-        message = str(err.get("message") or "内核对账工具报错")
+        message = str(err.get("message") or f"内核工具报错（{action}）")
         detail = err.get("detail") if isinstance(err.get("detail"), dict) else {}
         if code == "RECON_TASK_NOT_FOUND":
             raise ApiError("NOT_FOUND", message, detail=detail)
@@ -283,8 +306,11 @@ def _recon_result(out: Any, action: str) -> Any:
     return out
 
 
-class ReconProxy:
-    """对账两方法在**两种 transport** 上的统一收口（一层，不各写一遍）。
+class KernelProxy:
+    """内核调用在**两种 transport** 上的统一收口（一层，不各写一遍）。
+
+    覆盖：对账两方法（run_reconciliation / get_recon_report）与事件层两方法
+    （submit_event / query_events，add-invoice-request-lane）。
 
     为什么必须有：InProcess 形态委托内核模块 → 失败**抛** ErpError；MCP 形态经
     fastmcp 调工具面 → 内核 `@safe_tool` 把失败包成 `{"ok": false, "error": …}`
@@ -304,24 +330,51 @@ class ReconProxy:
             out = self._inner.run_reconciliation(
                 left_source, right_source, retry_task_id=retry_task_id,
                 tenant_id=tenant_id)
-        except Exception as exc:  # noqa: BLE001 见 _raise_recon_error
-            _raise_recon_error(exc, "run_reconciliation")
-        return _recon_result(out, "run_reconciliation")
+        except Exception as exc:  # noqa: BLE001 见 _raise_kernel_error
+            _raise_kernel_error(exc, "run_reconciliation")
+        return _kernel_result(out, "run_reconciliation")
 
     def get_recon_report(self, task_id, tenant_id=None):
         try:
             out = self._inner.get_recon_report(task_id, tenant_id=tenant_id)
-        except Exception as exc:  # noqa: BLE001 见 _raise_recon_error
-            _raise_recon_error(exc, "get_recon_report")
-        return _recon_result(out, "get_recon_report")
+        except Exception as exc:  # noqa: BLE001 见 _raise_kernel_error
+            _raise_kernel_error(exc, "get_recon_report")
+        return _kernel_result(out, "get_recon_report")
+
+    # ---- 事件层两方法（add-invoice-request-lane）----
+    #
+    # 这两条同样必须收口：MCP 形态下 `submit_event` 失败会以错误信封**返回**，
+    # 不收口就会把「内核拒收」当成功（开票申请回 pending 却什么也没写），
+    # 而 `query_events` 失败会被读成空列表（「这个客户没有申请」）——正是
+    # spec 明令禁止的两种假象。
+
+    def submit_event(self, event_type, stable_id, occurred_at, payload,
+                     source_ref=None):
+        try:
+            out = self._inner.submit_event(
+                event_type, stable_id, occurred_at, payload,
+                source_ref=source_ref)
+        except Exception as exc:  # noqa: BLE001 见 _raise_kernel_error
+            _raise_kernel_error(exc, "submit_event")
+        return _kernel_result(out, "submit_event")
+
+    def query_events(self, event_type=None, lane=None, status=None,
+                     limit=100, after_event_id=0):
+        try:
+            out = self._inner.query_events(
+                event_type=event_type, lane=lane, status=status, limit=limit,
+                after_event_id=after_event_id)
+        except Exception as exc:  # noqa: BLE001 见 _raise_kernel_error
+            _raise_kernel_error(exc, "query_events")
+        return _kernel_result(out, "query_events")
 
     def __getattr__(self, name):  # 其余工具面方法透传（不改变既有行为）
         return getattr(self._inner, name)
 
 
-def ensure_recon_proxy(client):
-    """幂等包装：已经是 ReconProxy 就原样返回。"""
-    return client if isinstance(client, ReconProxy) else ReconProxy(client)
+def ensure_kernel_proxy(client):
+    """幂等包装：已经是 KernelProxy 就原样返回。"""
+    return client if isinstance(client, KernelProxy) else KernelProxy(client)
 
 
 def build_kernel_client(settings: Settings):
@@ -331,6 +384,6 @@ def build_kernel_client(settings: Settings):
             raise ApiError("INVALID_ARGUMENT",
                            "ERP_KERNEL_TRANSPORT=mcp 需设置 ERP_KERNEL_URL")
         from fd_erp_vertical_templates.kernel_client import McpKernelClient
-        return ensure_recon_proxy(
+        return ensure_kernel_proxy(
             McpKernelClient(settings.kernel_url, settings.tenant_id))
-    return ensure_recon_proxy(InProcessKernelClient(settings))
+    return ensure_kernel_proxy(InProcessKernelClient(settings))

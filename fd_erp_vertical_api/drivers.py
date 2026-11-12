@@ -23,6 +23,7 @@ from fd_erp_vertical_templates.fulfillment import (DemoLogisticsAdapter,
 from fd_erp_vertical_templates.masterdata import MasterData
 from fd_erp_vertical_templates.orchestration import (AfterSalesOrchestrator,
                                                      CrmOrchestrator,
+                                                     InvoiceRequestLane,
                                                      OrderOrchestrator,
                                                      ProcurementOrchestrator)
 from fd_erp_vertical_templates.pricing import PricingRuleBook
@@ -47,6 +48,7 @@ class Drivers:
     orders: OrderOrchestrator
     aftersales: AfterSalesOrchestrator
     crm: CrmOrchestrator
+    invoices: InvoiceRequestLane
     procurement: ProcurementOrchestrator
     fulfillment: FulfillmentOrchestrator
     wms: WmsSnapshotAdapter
@@ -82,12 +84,13 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     aftersales = AfterSalesOrchestrator(settings.tenant_id, data_dir, master,
                                         orders=orders)
     crm = CrmOrchestrator(settings.tenant_id, data_dir, master)
+    invoices = InvoiceRequestLane(settings.tenant_id, kernel)
     fulfillment = FulfillmentOrchestrator(settings.tenant_id, data_dir, master,
                                           wms, logistics)
     disposal = ThresholdEvaluator(settings.tenant_id, data_dir)
     return Drivers(tenant_id=settings.tenant_id, master=master, pricing=pricing,
                    orders=orders, aftersales=aftersales, crm=crm,
-                   procurement=procurement,
+                   invoices=invoices, procurement=procurement,
                    fulfillment=fulfillment,
                    wms=wms, disposal=disposal, kernel=kernel)
 

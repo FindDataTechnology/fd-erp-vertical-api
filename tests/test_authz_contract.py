@@ -100,24 +100,25 @@ def test_grant_catalog_matches_paas_registry_union():
     assert set(KNOWN_GRANTS) == PAAS_REQUIRED_GRANTS_UNION
 
 
-def test_unimplemented_endpoints_return_501(client, seeded):
-    """契约里有、后端能力未就绪的端点如实 501 NOT_IMPLEMENTED（禁止假实现）。
+#: 契约里有、后端能力未就绪的 UE 端点（如实 501）。这份清单会随能力落地**变短**：
+#: 售后三条（`add-aftersale-lane`）、开票两条（`add-invoice-request-lane`）都已实现，
+#: 已移出。清单里留着已实现的端点，就变成「实现反而让测试变红」，最后没人敢实现。
+#: UE 面目前 19/19 全部实现，故为空——只剩 SE/SP/CP 的挂账面，见
+#: `tests/test_faces_e2e.py` 里各面的 501 段。
+UE_UNIMPLEMENTED: tuple[tuple[str, str, dict | None], ...] = ()
 
-    注意这份清单会随着能力落地而**变短**：售后域三条（apply/列表/详情）已随
-    `add-aftersale-lane` 实现，故不再列出——清单里留着已实现的端点，会变成
-    「实现反而让测试变红」，最后没人敢实现。
-    """
-    paths = [
-        ("GET", "/erp/supply-chain/v1/ue/invoice-requests", None),
-        ("POST", "/erp/supply-chain/v1/ue/invoice-requests", {}),
-    ]
-    for method, path, payload in paths:
+
+def test_unimplemented_endpoints_return_501(client, seeded):
+    """契约里有、后端能力未就绪的端点如实 501 NOT_IMPLEMENTED（禁止假实现）。"""
+    for method, path, payload in UE_UNIMPLEMENTED:
         r = (client.get(path, headers=_h(seeded["cust1"])) if method == "GET"
              else client.post(path, headers=_h(seeded["cust1"]), json=payload))
         assert r.status_code == 501, (method, path, r.status_code)
         err = r.json()["error"]
         assert err["code"] == "NOT_IMPLEMENTED"
         assert err["detail"].get("planned_lane")
+    assert UE_UNIMPLEMENTED == (), (
+        "UE 面已 19/19 实现；若新增挂账端点，把它加回本清单并说明为什么还没做")
 
 
 def test_pagination_cap_and_envelope(client, seeded):

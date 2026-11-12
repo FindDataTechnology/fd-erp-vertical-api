@@ -30,7 +30,7 @@ from .drivers import build_drivers, stock_visibility
 from .envelope import error_shell, list_shell, ok_shell, parse_page_params
 from .errors import ApiError, adapt_exception, http_status_for
 from .faces import register_cp_face, register_se_face, register_sp_face
-from .kernel_client import build_kernel_client, ensure_recon_proxy
+from .kernel_client import build_kernel_client, ensure_kernel_proxy
 from .logs import access_log_middleware
 from .observability import instrument_middleware
 from .pagesets import PagesetAuth, load_pageset_auth, require_grant
@@ -99,6 +99,24 @@ def _recon_degraded(exc: ApiError) -> ApiError:
         return ApiError("NOT_IMPLEMENTED",
                         f"内核对账引擎当前不可用（{exc.code}）：{exc.message}",
                         detail={"planned_lane": RECON_KERNEL_LANE,
+                                "kernel_code": exc.code})
+    return exc
+
+
+INVOICE_KERNEL_LANE = ("内核事件层（拟稿车道 submit_event + 确认门 decide_event）："
+                       "开票申请走 draft 车道落 pending，审核由确认门拍板")
+
+
+def _invoice_degraded(exc: ApiError) -> ApiError:
+    """内核不可用 → 501 + planned_lane（与对账代理同口径，放 except 分支）。
+
+    **不放顶层**：顶层 raise 会被 `scripts/planned_surfaces.py` 识别成「规划中
+    端点」重新挂回 501 清单，而这条车道其实已实现——只是内核此刻不可达。
+    """
+    if exc.code in ("NOT_WIRED", "UPSTREAM_UNAVAILABLE"):
+        return ApiError("NOT_IMPLEMENTED",
+                        f"内核事件层当前不可用（{exc.code}）：{exc.message}",
+                        detail={"planned_lane": INVOICE_KERNEL_LANE,
                                 "kernel_code": exc.code})
     return exc
 
@@ -174,8 +192,8 @@ def create_app(settings: Settings, kernel=None, *,
     app = FastAPI(title="fd-erp-vertical-api", version="0.1.0",
                   description="ERP 行业垂直 REST 服务面（UE 订货台）")
     app.state.settings = settings
-    # 对账两方法统一收口（两种 transport 的错误语义一致；见 kernel_client.ReconProxy）
-    app.state.kernel = ensure_recon_proxy(kernel or build_kernel_client(settings))
+    # 内核调用统一收口（两种 transport 的错误语义一致；见 kernel_client.KernelProxy）
+    app.state.kernel = ensure_kernel_proxy(kernel or build_kernel_client(settings))
     app.state.pageset_auth = pageset_auth or load_pageset_auth(
         inline_json=settings.pageset_auth_json,
         file_path=settings.pageset_auth_file)
@@ -707,22 +725,42 @@ def create_app(settings: Settings, kernel=None, *,
             raise _recon_degraded(exc) from exc
         return ok_shell(report)
 
-    # ---- 5) 开票域（grant: invoice.write）—— 后端能力未就绪，如实 501 ----
+    # ---- 5) 开票域（grant: invoice.write）—— 申请受理 + 进度查询 ----
+    #
+    # 边界（add-invoice-request-lane design D1）：申请走内核**拟稿车道**
+    # （submit_event → pending），审核是内核确认门 decide_event——契约里的
+    # 「进后台审核车道」就是这两样，不另造本地状态台账。票据本体仍走客户既有
+    # 开票渠道：本端不代开票、不生成票据文件、不采信调用方给的金额。
 
     @app.get("/erp/supply-chain/v1/ue/invoice-requests")
-    async def list_invoice_requests(ctx: dict = Depends(route("invoice.write"))):
-        raise ApiError("NOT_IMPLEMENTED",
-                       "开票申请后端能力未就绪：模板层无开票车道，金蝶 provider 无开票"
-                       "直连 action（docs/connector-onboarding-supply-chain.md §1.2）；"
-                       "禁止假实现", detail={"planned_lane": "后台审核车道 + 金蝶/线下开票通道"})
+    async def list_invoice_requests(request: Request,
+                                    ctx: dict = Depends(route("invoice.write"))):
+        """本人开票申请列表：状态取内核投影（pending/accepted/rejected）。"""
+        d = app.state.drivers
+        q = request.query_params
+        offset, limit = parse_page_params(q.get("offset"), q.get("limit"))
+        try:
+            out = d.invoices.requests_of(
+                ctx["customer_id"],
+                status=(q.get("status") or "").strip() or None,
+                date_from=(q.get("from") or "").strip() or None,
+                date_to=(q.get("to") or "").strip() or None)
+        except ApiError as exc:
+            raise _invoice_degraded(exc) from exc
+        # 分页只由统一壳做一次（管道层不截断），否则 total 与 rows_returned 对不上。
+        return list_shell(out["rows"], offset=offset, limit=limit,
+                          extra={k: v for k, v in out.items() if k != "rows"})
 
     @app.post("/erp/supply-chain/v1/ue/invoice-requests")
     async def create_invoice_request(body: dict[str, Any],
                                      ctx: dict = Depends(route("invoice.write"))):
-        raise ApiError("NOT_IMPLEMENTED",
-                       "开票申请后端能力未就绪：模板层无开票车道，金蝶 provider 无开票"
-                       "直连 action；禁止假实现",
-                       detail={"planned_lane": "后台审核车道 + 金蝶/线下开票通道"})
+        """受理开票申请：返回申请号与 pending，进后台审核车道。"""
+        d = app.state.drivers
+        try:
+            out = d.invoices.submit_request(ctx["customer_id"], body)
+        except ApiError as exc:
+            raise _invoice_degraded(exc) from exc
+        return ok_shell(out)
 
     # ---- 6) 售后域（grant: aftersale.write）—— 申请受理与进度查询 ----
     #
