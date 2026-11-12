@@ -50,7 +50,7 @@ class InProcessKernelClient:
     def submit_proposal(self, stable_id, lines, source_ref=None, kind="journal",
                         reversal_of=None, lane_fleet=None, lane_post=None,
                         lane_title=None, lane_target=None, tenant_id=None,
-                        submitted_by="agent"):
+                        dimensions=None, submitted_by="agent"):
         proposals = self._kernel_mod("proposals")
         with self._connection() as conn:
             return proposals.submit_proposal(
@@ -58,7 +58,8 @@ class InProcessKernelClient:
                 stable_id=stable_id, lines=lines, source_ref=source_ref,
                 kind=kind, reversal_of=reversal_of, lane_fleet=lane_fleet,
                 lane_post=lane_post, lane_title=lane_title,
-                lane_target=lane_target, submitted_by=submitted_by)
+                lane_target=lane_target, dimensions=dimensions,
+                submitted_by=submitted_by)
 
     def list_proposals(self, status=None, tenant_id=None, offset=0, limit=100):
         proposals = self._kernel_mod("proposals")
@@ -92,11 +93,12 @@ class InProcessKernelClient:
             return {"data": data, "rows_returned": len(data)}
 
     def query_entries(self, account_code=None, txn_id=None, tenant_id=None,
-                      offset=0, limit=100):
+                      dimensions=None, offset=0, limit=100):
         ledger = self._kernel_mod("ledger")
         with self._connection() as conn:
             rows = ledger.query_entries(conn, self._tenant,
-                                        account_code=account_code, txn_id=txn_id)
+                                        account_code=account_code, txn_id=txn_id,
+                                        dimensions=dimensions)
             return {"entries": rows[offset:offset + limit],
                     "rows_returned": len(rows)}
 

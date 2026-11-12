@@ -35,18 +35,28 @@ def test_budget_actual_reads_the_kernel_not_the_commitments(client_faces):
     before = d.budget.status("CC-1", "2026-11")
     assert before["rows"][0]["actual"] == "0.000000"    # 承诺不算实际
 
-    # 内核里真落一笔 5200 借方（确认门之后）
+    # 内核里真落一笔 5200 借方（确认门之后），带本期口径维度 cost-center=CC-1
     prop = d.kernel.submit_proposal("exp:2026-11-001", [
         {"account_code": "5200", "direction": "debit", "amount": "1200",
          "currency": "CNY"},
         {"account_code": "1000", "direction": "credit", "amount": "1200",
          "currency": "CNY"},
-    ])
+    ], dimensions={"cost_center": "CC-1"})
     d.kernel.confirm_proposal(proposal_id=prop["proposal_id"], confirmed_by="owner")
+
+    # 另一笔同样科目但没标维度：不能算进 CC-1，必须单列
+    other = d.kernel.submit_proposal("exp:2026-11-002", [
+        {"account_code": "5200", "direction": "debit", "amount": "300",
+         "currency": "CNY"},
+        {"account_code": "1000", "direction": "credit", "amount": "300",
+         "currency": "CNY"},
+    ])
+    d.kernel.confirm_proposal(proposal_id=other["proposal_id"], confirmed_by="owner")
 
     after = d.budget.status("CC-1", "2026-11")
     row = after["rows"][0]
-    assert row["actual"] == "1200.000000"               # 实际来自内核分录
+    assert row["actual"] == "1200.000000"               # 按维度汇总，来自内核分录
+    assert row["unattributedActual"] == "300.000000"    # 未标注维度单列，不静默漏掉
     assert row["committed"] == "3000.000000"            # 承诺仍在，两者分列
     assert after["totals"]["actual"] == "1200.000000"
-    assert "不区分维度" in after["caliber_note"]
+    assert "按同一维度汇总" in after["caliber_note"]
