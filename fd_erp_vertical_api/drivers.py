@@ -26,6 +26,7 @@ from fd_erp_vertical_templates.inventory import InventoryLane
 from fd_erp_vertical_templates.masterdata import MasterData
 from fd_erp_vertical_templates.assets import FixedAssetLane
 from fd_erp_vertical_templates.budget import BudgetBook
+from fd_erp_vertical_templates.invoice_receipt import InvoiceReceiptLane
 from fd_erp_vertical_templates.cost import CostEngine
 from fd_erp_vertical_templates.policy import PolicyBook
 from fd_erp_vertical_templates.orchestration import (AfterSalesOrchestrator,
@@ -82,6 +83,8 @@ class Drivers:
     assets: FixedAssetLane
     #: 预算控制车道：承诺由本层记（带维度），实际从内核分录按科目只读汇总。
     budget: BudgetBook
+    #: 开票回执车道：票开出来之后登记号码/金额/渠道，并答「谁还没开票」。
+    invoice_receipts: InvoiceReceiptLane
     wms: WmsSnapshotAdapter
     disposal: ThresholdEvaluator
     #: 内核工具面实现（形态无关）。数量面只读查询直接经它——库存余额是内核的派生
@@ -136,13 +139,15 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     assets = FixedAssetLane(settings.tenant_id, data_dir, kernel, policy)
     # 预算控制：维度/粒度/控制方式全读册；实际值只到科目层（内核分录无维度列）。
     budget = BudgetBook(settings.tenant_id, data_dir, kernel, policy)
+    # 开票回执：申请状态读内核投影；回执不落内核（票据本体不进账本）。
+    invoice_receipts = InvoiceReceiptLane(settings.tenant_id, data_dir, kernel)
     disposal = ThresholdEvaluator(settings.tenant_id, data_dir)
     return Drivers(tenant_id=settings.tenant_id, master=master, pricing=pricing,
                    orders=orders, aftersales=aftersales, crm=crm,
                    invoices=invoices, procurement=procurement,
                    fulfillment=fulfillment, freight=freight,
                    inventory=inventory, policy=policy, cost=cost, assets=assets,
-                   budget=budget,
+                   budget=budget, invoice_receipts=invoice_receipts,
                    wms=wms, disposal=disposal, kernel=kernel)
 
 
