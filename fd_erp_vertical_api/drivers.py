@@ -24,6 +24,8 @@ from fd_erp_vertical_templates.fulfillment import (DemoLogisticsAdapter,
 from fd_erp_vertical_templates.freight import FreightStatementLane
 from fd_erp_vertical_templates.inventory import InventoryLane
 from fd_erp_vertical_templates.masterdata import MasterData
+from fd_erp_vertical_templates.cost import CostEngine
+from fd_erp_vertical_templates.policy import PolicyBook
 from fd_erp_vertical_templates.orchestration import (AfterSalesOrchestrator,
                                                      CrmOrchestrator,
                                                      InvoiceRequestLane,
@@ -70,6 +72,10 @@ class Drivers:
     freight: FreightStatementLane
     #: 库存作业车道（入库/出库/调拨/盘点）：事实走拟稿车道，拍板后由 API 侧过门再投影。
     inventory: InventoryLane
+    #: 口径册（成本/预算/资产/合并的管理口径唯一出处）：变更走确认车道。
+    policy: PolicyBook
+    #: 成本计价（对已确认事实重放；方法由口径选）。
+    cost: CostEngine
     wms: WmsSnapshotAdapter
     disposal: ThresholdEvaluator
     #: 内核工具面实现（形态无关）。数量面只读查询直接经它——库存余额是内核的派生
@@ -116,12 +122,16 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 库存作业车道：入库/出库/调拨/盘点落内核数量面事实。模板层不过确认门
     # （内核工具面契约把 decide_event 列为模板「故意不覆盖」），拍板由本层端点完成。
     inventory = InventoryLane(settings.tenant_id, data_dir, kernel)
+    # 口径册与成本计价：口径是唯一出处，成本按口径重放事件——不建成本表、不改迁移。
+    policy = PolicyBook(settings.tenant_id, data_dir)
+    cost = CostEngine(settings.tenant_id, data_dir, kernel, policy,
+                      base_currency=settings.base_currency)
     disposal = ThresholdEvaluator(settings.tenant_id, data_dir)
     return Drivers(tenant_id=settings.tenant_id, master=master, pricing=pricing,
                    orders=orders, aftersales=aftersales, crm=crm,
                    invoices=invoices, procurement=procurement,
                    fulfillment=fulfillment, freight=freight,
-                   inventory=inventory,
+                   inventory=inventory, policy=policy, cost=cost,
                    wms=wms, disposal=disposal, kernel=kernel)
 
 
