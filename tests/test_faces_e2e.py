@@ -50,7 +50,11 @@ def test_se_full_chain(client_faces, seeded_faces):
     ws = r.json()["data"]
     assert ws["staff"] == "S-001" and ws["owned_customer_count"] == 1
     assert ws["pending_orders"] == 0 and ws["pending_alerts"] == 0
-    assert ws["today_visit_plan"] == 0 and "501" in ws["notes"]["crm"]
+    # 今日拜访 = 与 /se/visits 同源的已登记条数（CRM 车道已落地，不再是「未上线」）；
+    # 这里刚开库还没登记拜访，所以是 0，但口径说明不再指向 501。
+    assert ws["today_visit_plan"] == 0
+    assert "501" not in ws["notes"]["crm"]
+    assert "同源" in ws["notes"]["crm"]
 
     # 缺业务员身份头 → 401
     r = client_faces.get("/erp/supply-chain/v1/se/workspace",
@@ -199,16 +203,19 @@ def test_se_full_chain(client_faces, seeded_faces):
                           headers=_h_se(), json={"decision": "accept"})
     assert r.status_code == 404
 
-    # ---- CRM 线索/拜访：契约里有、编排层无车道 → 如实 501 ----
-    for method, path in (("GET", "/erp/supply-chain/v1/se/leads"),
-                         ("POST", "/erp/supply-chain/v1/se/leads"),
-                         ("POST", "/erp/supply-chain/v1/se/visits"),
-                         ("GET", "/erp/supply-chain/v1/se/visits")):
+    # ---- CRM 线索/拜访：车道已落地（add-crm-leads-visits），四条都不再是 501。
+    # 归属隔离/纪要必填/location 可选等行为判据在 tests/test_crm_api.py，
+    # 这里只钉住「从如实 501 变成真实现」这个交接点，防止有人把端点退回占位。
+    for method, path, body in (
+            ("GET", "/erp/supply-chain/v1/se/leads", None),
+            ("POST", "/erp/supply-chain/v1/se/leads", {"name": "e2e 线索"}),
+            ("GET", "/erp/supply-chain/v1/se/visits", None),
+            ("POST", "/erp/supply-chain/v1/se/visits",
+             {"customerId": seeded_faces["cust1"], "note": "e2e 拜访"})):
         r = (client_faces.get(path, headers=_h_se()) if method == "GET"
-             else client_faces.post(path, headers=_h_se(), json={}))
-        assert r.status_code == 501, (method, path)
-        err = r.json()["error"]
-        assert err["code"] == "NOT_IMPLEMENTED" and err["detail"]["planned_lane"]
+             else client_faces.post(path, headers=_h_se(), json=body))
+        assert r.status_code == 200, (method, path, r.text)
+        assert "planned_lane" not in r.text
 
 
 def test_se_grant_gate_and_fail_closed(reset_db, tmp_path, dsn, seeded_faces):

@@ -31,7 +31,7 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
 from fastapi import Depends, Request
@@ -165,7 +165,7 @@ def _statement_summary(service, customer_id: str) -> dict[str, Any]:
 
 def register_se_face(app, settings, d: Drivers, kernel,
                      statements, auth: PagesetAuth) -> None:
-    """SE 业务员台 15 端点（实现 10 + 如实 501 5）。"""
+    """SE 业务员台 15 端点（实现 14 + 如实 501 1：仅对账单推送）。"""
 
     def se_route(grant: str | None):
         def _dep(request: Request) -> dict[str, Any]:
@@ -205,16 +205,19 @@ def register_se_face(app, settings, d: Drivers, kernel,
         stms = [_statement_summary(statements, s["entity_id"]) for s in owned]
         open_statements = sum(s["open_count"] for s in stms)
         alerts = d.disposal.pending_tasks()
+        # 今日拜访与 /se/visits 同一真源（crm.today_visit_count），不另算一遍——
+        # 工作台是业务员每天第一眼看的数，与记录不同源时两个数都会失去可信度。
+        today = datetime.now(timezone.utc).date().isoformat()
         return ok_shell({
             "staff": ctx["staff"],
             "owned_customer_count": len(owned),
             "pending_orders": pending_orders,
             "open_statements": open_statements,
             "pending_alerts": len(alerts),
-            "today_visit_plan": 0,
+            "today_visit_plan": d.crm.today_visit_count(ctx["staff"], today),
             "notes": {
-                "crm": "CRM 线索/拜访车道未上线（GET/POST /se/leads、/se/visits "
-                       "如实 501）：今日拜访计划暂不可得，不伪造",
+                "crm": "今日拜访 = 本人今天已登记的拜访条数（与 /se/visits 同源）；"
+                       "此数反映已登记的实际拜访，计划排程另属一条待立的车道",
                 "alerts": "预警数 = 处置任务确认车道 pending 派单数"
                           "（reports 阈值→处置任务闭环的移动呈现）",
                 "orders": "待办 = 名下客户订单确认车道待决数",
@@ -288,35 +291,58 @@ def register_se_face(app, settings, d: Drivers, kernel,
                   reverse=True)
         return list_shell(rows, offset=offset, limit=limit)
 
+    # CRM 记录边界（add-crm-leads-visits design D5）：线索/拜访是**编排流程记录**，
+    # 不是事件层事实——事件层对 lead 系名字有黑名单（无载体即拒），而那说的是
+    # 「可计量的销售线索事实」，与「业务员今天记了一条线索」不是一件事。
+
     @app.get("/erp/supply-chain/v1/se/leads")
-    async def se_list_leads(ctx: dict = Depends(se_route("crm.read"))):
-        raise _not_implemented(
-            "CRM 线索池后端能力未就绪：模板层无 CRM 线索车道（orchestration 层"
-            "无线索/拜访事件记录）；禁止假实现",
-            "planned_lane: CRM 线索/拜访事件档（编排层扩展）+ 底座 chat 面线索助手")
+    async def se_list_leads(request: Request,
+                            ctx: dict = Depends(se_route("crm.read"))):
+        """本人线索池（按创建时刻倒序）。"""
+        q = request.query_params
+        offset, limit = parse_page_params(q.get("offset"), q.get("limit"))
+        out = d.crm.leads_of(
+            ctx["staff"],
+            status=(q.get("status") or "").strip() or None,
+            offset=offset, limit=limit)
+        return list_shell(out["rows"], offset=offset, limit=limit)
 
     @app.post("/erp/supply-chain/v1/se/leads")
     async def se_create_lead(body: dict[str, Any],
                              ctx: dict = Depends(se_route("crm.visit.write"))):
-        raise _not_implemented(
-            "建线索后端能力未就绪：模板层无 CRM 线索车道；禁止假实现",
-            "planned_lane: CRM 线索/拜访事件档（编排层扩展）")
+        """建线索：名称必填；状态只能是 new（推进没有车道，不假装有）。"""
+        return ok_shell(d.crm.create_lead(ctx["staff"], body))
 
     @app.post("/erp/supply-chain/v1/se/visits")
     async def se_create_visit(body: dict[str, Any],
                               ctx: dict = Depends(se_route("crm.visit.write"))):
-        raise _not_implemented(
-            "拜访登记后端能力未就绪：模板层无 CRM 拜访车道（定位等采集项还须"
-            "隐私声明过审后启用）；禁止假实现",
-            "planned_lane: CRM 拜访事件档（编排层扩展；定位/影像可选采集随隐私"
-            "声明过审启用）")
+        """拜访登记：纪要必填，客户或线索至少一个。
+
+        `location` 只作为调用方给的引用原样保存——设备侧定位/影像采集要隐私声明
+        过审，本端点不采集、不推断、不补默认值（design D4）。
+        """
+        customer_id = str(body.get("customerId") or body.get("customer_id")
+                          or "").strip() or None
+        lead_ref = str(body.get("leadRef") or body.get("lead_ref")
+                       or "").strip() or None
+        location = body.get("location")
+        return ok_shell(d.crm.record_visit(
+            ctx["staff"], customer_id=customer_id, lead_ref=lead_ref,
+            note=str(body.get("note") or ""),
+            location=None if location is None else str(location)))
 
     @app.get("/erp/supply-chain/v1/se/visits")
     async def se_list_visits(request: Request,
                              ctx: dict = Depends(se_route("crm.visit.write"))):
-        raise _not_implemented(
-            "拜访记录后端能力未就绪（同 POST /se/visits）",
-            "planned_lane: CRM 拜访事件档（编排层扩展）")
+        """本人拜访记录（期间过滤，含端点）。"""
+        q = request.query_params
+        offset, limit = parse_page_params(q.get("offset"), q.get("limit"))
+        out = d.crm.visits_of(
+            ctx["staff"],
+            date_from=(q.get("from") or "").strip() or None,
+            date_to=(q.get("to") or "").strip() or None,
+            offset=offset, limit=limit)
+        return list_shell(out["rows"], offset=offset, limit=limit)
 
     # ---- 3) 代客下单域（确认门 + 代理身份留痕）----
 

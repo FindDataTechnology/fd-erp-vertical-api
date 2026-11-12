@@ -91,9 +91,9 @@ sha256（跨租户被拒时记的是请求方声称那个租户的哈希）；`d
 | 履约触发 | POST /ue/orders/{id}/fulfillment | `plan_fulfillment`：移交记录 → 履约计划（直发/多仓分配）。未确认→409 `WORKFLOW_STATE`（不伪造计划）；已有计划→幂等返回 `idempotent:true`；越域→404 | 实现 |
 | 对账 | GET /ue/statements(/{id}) · POST /ue/statements/{id}/confirm | 订单按月派生 + 内核 proposal 面状态真源；确认→自平核对 proposal（pending 确认门，幂等回放）；异议→ThresholdEvaluator 处置车道 | 实现 |
 | 开票 | GET/POST /ue/invoice-requests | — | **501 NOT_IMPLEMENTED**（模板层无开票车道；金蝶 provider 无开票直连 action，见 docs/connector-onboarding-supply-chain.md §1.2） |
-| 售后 | POST/GET /ue/aftersale-requests(/{id}) | — | **501 NOT_IMPLEMENTED**（编排层无售后处置车道） |
+| 售后 | POST/GET /ue/aftersale-requests(/{id}) | 售后编排事件档（`record="aftersale"`，只追加流程留痕）：申请受理 → 进度查询；申请是**流程记录**不是入库事实，不进事件层 | 实现 |
 
-计数：**实现 14/19；501 如实 5/19**（开票 2 + 售后 3），全部带 `planned_lane`
+计数：**实现 17/19；501 如实 2/19**（开票 2），全部带 `planned_lane`
 说明，禁止假实现。AI 助手入口按契约 §7 无独立端点（复用底座 chat/WS 面）。
 WS 事件面（订单状态推送/确认门回执）属底座通道接入，随 paas P1 逐页联调，挂账。
 
@@ -124,13 +124,14 @@ WS 事件面（订单状态推送/确认门回执）属底座通道接入，随 
 |---|---|---|---|
 | 工作台 | GET /se/workspace | 名下客户（主数据 `sales_rep`）+ 订单/对账/处置任务聚合卡 | 实现 |
 | CRM | GET /se/customers(/{id})(/orders) | 主数据客户档 + kernel query_credit（账本同源）+ 对账单派生摘要；未登记信用额度如实缺省 | 实现 |
-| CRM | GET/POST /se/leads · POST/GET /se/visits | — | **501 NOT_IMPLEMENTED**（模板层无 CRM 线索/拜访车道） |
+| CRM | GET/POST /se/leads · POST/GET /se/visits | CRM 编排事件档（`record="lead"/"visit"`，只追加流程留痕）：线索池只本人、状态默认 `new`；拜访纪要必填、主体（客户/线索）至少一个；`location` 只存调用方给的引用，服务端不采集不补默认；越域与不存在同一条 404 | 实现 |
 | 代客下单 | POST /se/orders/proxy · GET /se/orders(/{id}) | 与 POST /ue/orders 同一 accept_order 链路（取价+信用校验同源）；业务员-客户归属主数据校验（越权 403）；代理身份以 `requested_by=se:{工号}` 留痕订单事件档（请求/服务端日志/单据三处） | 实现 |
 | 预警处置 | GET /se/alerts · POST /se/alerts/{id}/handle | reports 处置任务确认车道（与 owner 席位同一确认门实现）；accept→拍板生效，reject→拒绝留痕不落账 | 实现 |
 | 对账协助 | GET /se/statements | StatementService 按名下客户聚合 | 实现 |
 | 对账协助 | POST /se/statements/{id}/push | — | **501 NOT_IMPLEMENTED**（端内消息通道归底座通知面；推送须留痕；客户确认仍走 UE 端确认门，SE 端不可代拍） |
 
-计数：**实现 10/15；501 如实 5/15**。
+计数：**实现 14/15；501 如实 1/15**（对账单推送）。工作台的 `today_visit_plan`
+与 `/se/visits` 同源（本人今天已登记的拜访条数），不再写死 0。
 
 ## 端点覆盖（SP 供应商，契约 13 条）
 
@@ -144,6 +145,10 @@ WS 事件面（订单状态推送/确认门回执）属底座通道接入，随 
 | 结算 | GET /sp/settlements | — | **501 NOT_IMPLEMENTED**（与金蝶往来面同源挂账；**零支付操作面红线 D4 不变**） |
 
 计数：**实现 7/13；501 如实 6/13**。
+
+**契约外：`GET /sp/inventory`** —— 到货落 `goods_received` 事件后的库存数量只读面
+（按供应商档案数据域过滤，数量来自事件投影，不建第二份库存台账）。不计入 13 条
+契约端点：契约未列该面，供应商看的是「我供的货在我方仓里的现存数量」。
 
 ## 端点覆盖（CP 承运商，契约 12 条）
 
@@ -159,7 +164,8 @@ WS 事件面（订单状态推送/确认门回执）属底座通道接入，随 
 
 计数：**实现 8/12；501 如实 4/12**。
 
-**三面合计：实现 25/40；501 如实 15/40**，全部带 `planned_lane`，禁止假实现。
+**四面合计（契约 59 条）：实现 46/59；501 如实 13/59**（UE 开票 2 + SE 推送 1 +
+SP 对账/发票/结算 6 + CP 月台时段/运费单 4），全部带 `planned_lane`，禁止假实现。
 
 ### 501 未接通面清单（机器可读，禁止手抄）
 
@@ -198,13 +204,13 @@ ERP_LEDGER_DATABASE_URL=... .venv/bin/python -m pytest tests/ -q
 # 缺省读 secrets/erp-demo.env 并把库名 erp_demo→erp_test_b（口令绝不打印）
 ```
 
-26 用例（14 UE + 12 三面/履约触发）：pagesets 授权形状对齐 → 商品检索/详情（池过滤+库存
+用例（UE + SE/SP/CP 四面对齐）：pagesets 授权形状对齐 → 商品检索/详情（池过滤+库存
 可见性）→ 进货单 → 取价试算（额度预估）→ 下单（信用占用真记账）→ 查单/越域
 404 → 履约（handoff_pending → plan → view）→ 对账单确认门（pending→confirmed）→
 异议处置车道 → 跨租户 403 → fail-closed 无授权 403 → grant 缺失 403 →
-5×501 如实 → 分页/上限/壳/校验错误 400；
+2×501 如实（开票）→ 分页/上限/壳/校验错误 400；
 SE 面：工作台/名下客户/360/代客下单全链（归属越权 403 + 额度不足 422 + 代理
-身份留痕）/预警处置拍板（accept/reject）/CRM 域 501；
+身份留痕）/预警处置拍板（accept/reject）/CRM 线索池与拜访（缺纪要 400、他人客户 404、location 可选且不补默认）；
 SP 面：推送可见域 → 接单（重复裁决 409、拒单须 note）→ 发货反馈（自动到货
 预告）→ 补录 → 入库任务联动 → 越权 404 → 对账/发票/结算 501；
 CP 面：运单域 → 承运回执 → 月台（预留/改约/取消）→ 提货打卡 → 正常/异常 POD
