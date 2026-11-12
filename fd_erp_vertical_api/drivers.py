@@ -29,6 +29,7 @@ from fd_erp_vertical_templates.budget import BudgetBook
 from fd_erp_vertical_templates.invoice_receipt import InvoiceReceiptLane
 from fd_erp_vertical_templates.cost import CostEngine
 from fd_erp_vertical_templates.policy import PolicyBook
+from fd_erp_vertical_templates.statements import StatementBook
 from fd_erp_vertical_templates.orchestration import (AfterSalesOrchestrator,
                                                      CrmOrchestrator,
                                                      InvoiceRequestLane,
@@ -85,6 +86,8 @@ class Drivers:
     budget: BudgetBook
     #: 开票回执车道：票开出来之后登记号码/金额/渠道，并答「谁还没开票」。
     invoice_receipts: InvoiceReceiptLane
+    #: 财务报表：试算平衡 / 利润表 / 资产负债表 / 按维度费用（全部从分录现算）。
+    statements: StatementBook
     wms: WmsSnapshotAdapter
     disposal: ThresholdEvaluator
     #: 内核工具面实现（形态无关）。数量面只读查询直接经它——库存余额是内核的派生
@@ -141,6 +144,9 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     budget = BudgetBook(settings.tenant_id, data_dir, kernel, policy)
     # 开票回执：申请状态读内核投影；回执不落内核（票据本体不进账本）。
     invoice_receipts = InvoiceReceiptLane(settings.tenant_id, data_dir, kernel)
+    # 三表从分录现算：不建表、不缓存（资产负债表自带平衡断言）。
+    statements = StatementBook(settings.tenant_id, kernel,
+                               base_currency=settings.base_currency)
     disposal = ThresholdEvaluator(settings.tenant_id, data_dir)
     return Drivers(tenant_id=settings.tenant_id, master=master, pricing=pricing,
                    orders=orders, aftersales=aftersales, crm=crm,
@@ -148,6 +154,7 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                    fulfillment=fulfillment, freight=freight,
                    inventory=inventory, policy=policy, cost=cost, assets=assets,
                    budget=budget, invoice_receipts=invoice_receipts,
+                   statements=statements,
                    wms=wms, disposal=disposal, kernel=kernel)
 
 
