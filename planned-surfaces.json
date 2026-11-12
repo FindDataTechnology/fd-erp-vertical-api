@@ -21,7 +21,7 @@
       "http_status": 501,
       "error_code": "NOT_IMPLEMENTED",
       "planned_lane": "仓库作业编排月台资源建模（时段目录 + 占用计算）",
-      "source": "fd_erp_vertical_api/faces.py:1072"
+      "source": "fd_erp_vertical_api/faces.py:1150"
     },
     {
       "method": "GET",
@@ -31,8 +31,8 @@
       "grant": "freight.statement.read",
       "http_status": 501,
       "error_code": "NOT_IMPLEMENTED",
-      "planned_lane": "计费 read 工具面（fee_details 按承运商归集 + 规则/事件/单据/原始作业四层溯源）→ 运费单派生；确认门届时=内核自平核对 proposal（同 UE 对账契约）",
-      "source": "fd_erp_vertical_api/faces.py:1194"
+      "planned_lane": "先把承运商引用落到能归集的载体上（运单/派车记录进内核事件 refs，或由计费规则按 waybill 反查承运商）→ 再按 carrier 归集 list_fees 的 get_fee_detail 溯源 → 派生运费单；确认门届时=内核自平核对 proposal（同 UE 对账契约）",
+      "source": "fd_erp_vertical_api/faces.py:1274"
     },
     {
       "method": "GET",
@@ -43,7 +43,7 @@
       "http_status": 501,
       "error_code": "NOT_IMPLEMENTED",
       "planned_lane": "同 GET /cp/freight-statements",
-      "source": "fd_erp_vertical_api/faces.py:1204"
+      "source": "fd_erp_vertical_api/faces.py:1285"
     },
     {
       "method": "POST",
@@ -54,7 +54,7 @@
       "http_status": 501,
       "error_code": "NOT_IMPLEMENTED",
       "planned_lane": "运费单 read 面到位后确认门=内核自平核对 proposal（超时/失败不假报成功）；异议进处置车道",
-      "source": "fd_erp_vertical_api/faces.py:1211"
+      "source": "fd_erp_vertical_api/faces.py:1292"
     },
     {
       "method": "POST",
@@ -65,7 +65,7 @@
       "http_status": 501,
       "error_code": "NOT_IMPLEMENTED",
       "planned_lane": "底座端内消息通道（notify 车道）接入后实施推送留痕；客户确认门=UE /ue/statements/{id}/confirm（内核 proposal 车道）",
-      "source": "fd_erp_vertical_api/faces.py:512"
+      "source": "fd_erp_vertical_api/faces.py:590"
     },
     {
       "method": "GET",
@@ -76,7 +76,7 @@
       "http_status": 501,
       "error_code": "NOT_IMPLEMENTED",
       "planned_lane": "同 POST /sp/invoices（上传历史与核验进度 read 面）",
-      "source": "fd_erp_vertical_api/faces.py:875"
+      "source": "fd_erp_vertical_api/faces.py:953"
     },
     {
       "method": "POST",
@@ -87,7 +87,7 @@
       "http_status": 501,
       "error_code": "NOT_IMPLEMENTED",
       "planned_lane": "中台文件服务上传契约 + 发票查验/勾兑车道 + 金蝶连接器回写（contract-only）",
-      "source": "fd_erp_vertical_api/faces.py:867"
+      "source": "fd_erp_vertical_api/faces.py:945"
     },
     {
       "method": "GET",
@@ -98,7 +98,7 @@
       "http_status": 501,
       "error_code": "NOT_IMPLEMENTED",
       "planned_lane": "金蝶付款/结算回写 read 面（只读，无任何支付/账户操作）",
-      "source": "fd_erp_vertical_api/faces.py:883"
+      "source": "fd_erp_vertical_api/faces.py:961"
     },
     {
       "method": "GET",
@@ -109,7 +109,7 @@
       "http_status": 501,
       "error_code": "NOT_IMPLEMENTED",
       "planned_lane": "金蝶 provider 往来面拉取（任务 3.1）→ 账本内核计算应付 → 单据级对账单派生 + 确认门（内核自平核对 proposal，同 UE 契约）",
-      "source": "fd_erp_vertical_api/faces.py:841"
+      "source": "fd_erp_vertical_api/faces.py:919"
     },
     {
       "method": "GET",
@@ -120,7 +120,7 @@
       "http_status": 501,
       "error_code": "NOT_IMPLEMENTED",
       "planned_lane": "同 GET /sp/statements",
-      "source": "fd_erp_vertical_api/faces.py:848"
+      "source": "fd_erp_vertical_api/faces.py:926"
     },
     {
       "method": "POST",
@@ -131,7 +131,7 @@
       "http_status": 501,
       "error_code": "NOT_IMPLEMENTED",
       "planned_lane": "金额同源到位后确认门=内核自平核对 proposal（超时/失败不假报成功）；异议进处置车道",
-      "source": "fd_erp_vertical_api/faces.py:853"
+      "source": "fd_erp_vertical_api/faces.py:931"
     }
   ]
 }

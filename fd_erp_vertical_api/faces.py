@@ -1265,9 +1265,11 @@ def register_cp_face(app, settings, d: Drivers, kernel,
     # ---- 6) 运费对账域 —— 后端能力未就绪，如实 501 ----
 
     _CP_FREIGHT_501 = (
-        "运费单后端能力未就绪：运费单来自计费规则引擎（事件驱动 + 日终快照，"
-        "tasks 7.2），按承运商归集与四层穿透溯源需计费 read 工具面扩展"
-        "（KernelClient 现无 fee_details 归集查询）；禁止假实现")
+        "运费单后端能力未就绪：卡在**承运商维度缺失**，不是读工具面。"
+        "内核侧 list_fees / get_fee_detail（四层溯源）早已可用，但费用行"
+        "（含 provenance.document_refs）不带承运商引用——内核事件与费用明细里"
+        "根本没有 carrier 这一维（本仓写事件也不带 refs），按承运商归集就无从下手；"
+        "在此之上造「运费单」只能是编数字。禁止假实现")
 
     @app.get("/erp/supply-chain/v1/cp/freight-statements")
     async def cp_freight_statements(request: Request,
@@ -1275,8 +1277,9 @@ def register_cp_face(app, settings, d: Drivers, kernel,
                                         "freight.statement.read"))):
         raise _not_implemented(
             _CP_FREIGHT_501,
-            "planned_lane: 计费 read 工具面（fee_details 按承运商归集 + 规则/"
-            "事件/单据/原始作业四层溯源）→ 运费单派生；确认门届时=内核自平核对 "
+            "planned_lane: 先把承运商引用落到能归集的载体上（运单/派车记录进内核"
+            "事件 refs，或由计费规则按 waybill 反查承运商）→ 再按 carrier 归集 "
+            "list_fees 的 get_fee_detail 溯源 → 派生运费单；确认门届时=内核自平核对 "
             "proposal（同 UE 对账契约）")
 
     @app.get("/erp/supply-chain/v1/cp/freight-statements/{statement_id}")
