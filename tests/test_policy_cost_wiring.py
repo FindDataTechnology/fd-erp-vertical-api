@@ -17,8 +17,8 @@ def test_drivers_expose_policy_and_cost(client_faces):
     assert now["counts"]["default"] == len(KEYS)
     assert now["values"]["cost_method"] == "weighted-average"
     assert now["keys"]["cost_method"]["enforced"] is True
-    # 未交付引擎的口径：登记在册但明确不生效
-    assert now["keys"]["depreciation_method"]["enforced"] is False
+    # 折旧引擎随 add-fixed-assets-lane 交付 → 该口径已真生效（不再是「仅登记」）
+    assert now["keys"]["depreciation_method"]["enforced"] is True
 
 
 def test_close_report_uses_the_same_policy_book(client_faces):
