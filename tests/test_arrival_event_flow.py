@@ -99,6 +99,11 @@ def test_7_1_arrival_writes_event_stock_and_entries(client_faces, seeded_faces):
     assert stock["unit"] == "个"
     assert stock["as_of_event_id"] == ev["id"]
     assert stock["drift"] is False
+    # 读数来源必须标注：数量面是本板块已确认事实的投影，不是外部 WMS 实时库存
+    # （change: add-inventory-operations-lane 任务 2.2）
+    assert stock["source"] == "board-confirmed-facts"
+    assert "本板块已确认事实" in stock["caliber_note"]
+    assert "外部 WMS" in stock["caliber_note"]
 
     # ③ 账本：分录按审批过的规则派生，借 1405 / 贷 2202
     entries = _entries(client_faces)

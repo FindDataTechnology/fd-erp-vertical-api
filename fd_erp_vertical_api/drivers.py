@@ -22,6 +22,7 @@ from typing import Any
 from fd_erp_vertical_templates.fulfillment import (DemoLogisticsAdapter,
                                                    FulfillmentOrchestrator)
 from fd_erp_vertical_templates.freight import FreightStatementLane
+from fd_erp_vertical_templates.inventory import InventoryLane
 from fd_erp_vertical_templates.masterdata import MasterData
 from fd_erp_vertical_templates.orchestration import (AfterSalesOrchestrator,
                                                      CrmOrchestrator,
@@ -67,6 +68,8 @@ class Drivers:
     procurement: ProcurementOrchestrator
     fulfillment: FulfillmentOrchestrator
     freight: FreightStatementLane
+    #: 库存作业车道（入库/出库/调拨/盘点）：事实走拟稿车道，拍板后由 API 侧过门再投影。
+    inventory: InventoryLane
     wms: WmsSnapshotAdapter
     disposal: ThresholdEvaluator
     #: 内核工具面实现（形态无关）。数量面只读查询直接经它——库存余额是内核的派生
@@ -110,11 +113,15 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 自平核对 proposal；本层不另存一份运费单状态（第二份事实源）。
     freight = FreightStatementLane(settings.tenant_id, kernel,
                                    base_currency=settings.base_currency)
+    # 库存作业车道：入库/出库/调拨/盘点落内核数量面事实。模板层不过确认门
+    # （内核工具面契约把 decide_event 列为模板「故意不覆盖」），拍板由本层端点完成。
+    inventory = InventoryLane(settings.tenant_id, data_dir, kernel)
     disposal = ThresholdEvaluator(settings.tenant_id, data_dir)
     return Drivers(tenant_id=settings.tenant_id, master=master, pricing=pricing,
                    orders=orders, aftersales=aftersales, crm=crm,
                    invoices=invoices, procurement=procurement,
                    fulfillment=fulfillment, freight=freight,
+                   inventory=inventory,
                    wms=wms, disposal=disposal, kernel=kernel)
 
 
@@ -138,7 +145,14 @@ def stock_on_hand(drivers: Drivers, sku: str, *,
             "quantity": out.get("quantity"), "unit": out.get("unit"),
             "as_of_event_id": out.get("as_of_event_id"),
             "drift": out.get("drift"),
-            "completeness": out.get("completeness")}
+            "completeness": out.get("completeness"),
+            # 读数来源必须标注（change: add-inventory-operations-lane 任务 2.2）：
+            # 这个数是本板块收下并经确认的事实投影，不是外部 WMS 的实时库存。
+            # 两者不一致是常态（外部台账答「仓库怎么作业」，本板块答「我方认可多少」），
+            # 标错来源会让人拿它当仓库实时库存做作业决策。
+            "source": "board-confirmed-facts",
+            "caliber_note": "数量面＝本板块已确认事实的投影，不是外部 WMS 实时库存；"
+                            "未过确认门的事实不参与任何余额，差异进差异清单"}
 
 
 def stock_visibility(drivers: Drivers, product_code: str,
