@@ -557,20 +557,30 @@ def test_cp_full_chain(client_faces, seeded_faces):
                          headers=_h_cp("CARRIER-A"))
     assert r.json()["data"]["pod_exceptions"] == 1
 
-    # ---- 可约月台时段/运费单：契约里有、后端无车道 → 如实 501 ----
-    for method, path, payload in (
-            ("GET", "/erp/supply-chain/v1/cp/dock-slots", None),
-            ("GET", "/erp/supply-chain/v1/cp/freight-statements", None),
-            ("GET", "/erp/supply-chain/v1/cp/freight-statements/FS-1", None),
-            ("POST", "/erp/supply-chain/v1/cp/freight-statements/FS-1/confirm",
-             {"decision": "confirmed"})):
-        r = (client_faces.get(path, headers=_h_cp("CARRIER-A")) if method == "GET"
-             else client_faces.post(path, headers=_h_cp("CARRIER-A"),
-                                    json=payload))
-        assert r.status_code == 501, (method, path, r.status_code)
-        err = r.json()["error"]
-        assert err["code"] == "NOT_IMPLEMENTED"
-        assert err["detail"]["planned_lane"]
+    # ---- 月台可约时段：契约里有、后端无车道 → 如实 501 ----
+    r = client_faces.get("/erp/supply-chain/v1/cp/dock-slots",
+                         headers=_h_cp("CARRIER-A"))
+    assert r.status_code == 501
+    err = r.json()["error"]
+    assert err["code"] == "NOT_IMPLEMENTED"
+    assert err["detail"]["planned_lane"]
+
+    # ---- 运费对账域：已实现（读面=内核费用行归集；本期无带承运商的费用行 → 空单+说明）
+    r = client_faces.get("/erp/supply-chain/v1/cp/freight-statements",
+                         headers=_h_cp("CARRIER-A"))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 0 and body["rows_returned"] == 0
+    assert "没有带承运商" in body["note"]  # 空表也必须说明为什么空
+    # 不存在的运费单 → 404（不编造）
+    r = client_faces.get("/erp/supply-chain/v1/cp/freight-statements/FS-1",
+                         headers=_h_cp("CARRIER-A"))
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "NOT_FOUND"
+    r = client_faces.post(
+        "/erp/supply-chain/v1/cp/freight-statements/FS-1/confirm",
+        headers=_h_cp("CARRIER-A"), json={"decision": "accepted"})
+    assert r.status_code == 404
 
 
 # ==========================================================================

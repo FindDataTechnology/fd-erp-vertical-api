@@ -256,6 +256,41 @@ class InProcessKernelClient:
             return posting.post_event(conn, settings=self._s,
                                       tenant_id=self._tenant, event_id=event_id)
 
+    # ---- 计费（change: add-carrier-freight-dimension 4.1）----
+    #
+    # 运费单归集读的是内核费用行（费用行 `refs` = 计费时传入的 document_refs，
+    # 承运商维度就落在那里）。内核这三个工具早已在 MCP 工具面上，但 InProcess
+    # 形态此前没桥接——不补这一层，运费单车道在进程内直接 AttributeError。
+
+    def _billing_mod(self):
+        try:
+            import fd_erp_ledger_mcp.billing as billing
+        except ImportError as exc:
+            raise ApiError("NOT_WIRED",
+                           "内核计费工具未上线（fail-closed，不编运费单）",
+                           detail={"module": "fd_erp_ledger_mcp.billing"}) from exc
+        return billing
+
+    def bill_event(self, event, source_ref=None):
+        mod = self._billing_mod()
+        with self._connection() as conn:
+            return mod.bill_event(conn, settings=self._s, tenant_id=self._tenant,
+                                  event=event, source_ref=source_ref)
+
+    def list_fees(self, offset=0, limit=100):
+        """与 MCP 工具面同形：`paginate(...)`（data/total/truncated）。"""
+        mod = self._billing_mod()
+        from fd_erp_ledger_mcp.result import paginate
+        with self._connection() as conn:
+            rows = mod.list_fees(conn, self._tenant)
+            return paginate(rows, offset=offset, limit=limit)
+
+    def get_fee_detail(self, fee_id):
+        mod = self._billing_mod()
+        with self._connection() as conn:
+            return mod.get_fee_detail(conn, settings=self._s,
+                                      tenant_id=self._tenant, fee_id=fee_id)
+
 
 def _is_transport_failure(exc: Exception) -> bool:
     """传输层失败（内核包缺失 / DB 连接不可达 / MCP 连接异常），与业务错误区分。"""

@@ -15,11 +15,13 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from typing import Any
 
 from fd_erp_vertical_templates.fulfillment import (DemoLogisticsAdapter,
                                                    FulfillmentOrchestrator)
+from fd_erp_vertical_templates.freight import FreightStatementLane
 from fd_erp_vertical_templates.masterdata import MasterData
 from fd_erp_vertical_templates.orchestration import (AfterSalesOrchestrator,
                                                      CrmOrchestrator,
@@ -37,6 +39,19 @@ from .errors import ApiError
 #: 同一个字符串）。三处必须一致，否则同一批货记在一个维度、查在另一个维度。
 UNKNOWN_DIMENSION = "__unknown__"
 
+#: 过渡期双写开关（change: add-carrier-freight-dimension 任务 2.2 / design D5）。
+#: 默认**关**：关=只写本地归档，既有写面一个字节不变；开=本地归档照写，同时把
+#: 提货出库事实写进事件层（`goods_issued`，draft，带 waybill/carrier），两份逐日
+#: 对账（`scripts/recon_delivery_events.py`）。
+#: 直接读环境而非进 `Settings`：这是随本单拆除的过渡开关，不是长期配置项；同类先例
+#: 见 `logs.py` 的访问日志开关。
+EMIT_EVENTS_ENV = "ERP_FULFILLMENT_EMIT_EVENTS"
+
+
+def _emit_events_enabled() -> bool:
+    raw = (os.environ.get(EMIT_EVENTS_ENV) or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
 
 @dataclass
 class Drivers:
@@ -51,6 +66,7 @@ class Drivers:
     invoices: InvoiceRequestLane
     procurement: ProcurementOrchestrator
     fulfillment: FulfillmentOrchestrator
+    freight: FreightStatementLane
     wms: WmsSnapshotAdapter
     disposal: ThresholdEvaluator
     #: 内核工具面实现（形态无关）。数量面只读查询直接经它——库存余额是内核的派生
@@ -85,13 +101,20 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                                         orders=orders)
     crm = CrmOrchestrator(settings.tenant_id, data_dir, master)
     invoices = InvoiceRequestLane(settings.tenant_id, kernel)
+    # 注入内核 = 本层可以把交付事实写进事件层；是否真写由双写开关决定（默认关）。
+    # 不注入内核则本层与事件层零耦合（单测与纯编排场景）。
     fulfillment = FulfillmentOrchestrator(settings.tenant_id, data_dir, master,
-                                          wms, logistics)
+                                          wms, logistics, kernel=kernel,
+                                          emit_events=_emit_events_enabled())
+    # 运费单车道：归集读的是内核费用行（`list_fees` 每行的 `refs`），确认走内核
+    # 自平核对 proposal；本层不另存一份运费单状态（第二份事实源）。
+    freight = FreightStatementLane(settings.tenant_id, kernel,
+                                   base_currency=settings.base_currency)
     disposal = ThresholdEvaluator(settings.tenant_id, data_dir)
     return Drivers(tenant_id=settings.tenant_id, master=master, pricing=pricing,
                    orders=orders, aftersales=aftersales, crm=crm,
                    invoices=invoices, procurement=procurement,
-                   fulfillment=fulfillment,
+                   fulfillment=fulfillment, freight=freight,
                    wms=wms, disposal=disposal, kernel=kernel)
 
 

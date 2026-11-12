@@ -1262,40 +1262,66 @@ def register_cp_face(app, settings, d: Drivers, kernel,
                             "适配器回流，零平行取数）",
         })
 
-    # ---- 6) 运费对账域 —— 后端能力未就绪，如实 501 ----
-
-    _CP_FREIGHT_501 = (
-        "运费单后端能力未就绪：卡在**承运商维度缺失**，不是读工具面。"
-        "内核侧 list_fees / get_fee_detail（四层溯源）早已可用，但费用行"
-        "（含 provenance.document_refs）不带承运商引用——内核事件与费用明细里"
-        "根本没有 carrier 这一维（本仓写事件也不带 refs），按承运商归集就无从下手；"
-        "在此之上造「运费单」只能是编数字。禁止假实现")
+    # ---- 6) 运费对账域（读面=内核费用行；确认=内核自平核对 proposal）----
 
     @app.get("/erp/supply-chain/v1/cp/freight-statements")
     async def cp_freight_statements(request: Request,
                                     ctx: dict = Depends(cp_route(
                                         "freight.statement.read"))):
-        raise _not_implemented(
-            _CP_FREIGHT_501,
-            "planned_lane: 先把承运商引用落到能归集的载体上（运单/派车记录进内核"
-            "事件 refs，或由计费规则按 waybill 反查承运商）→ 再按 carrier 归集 "
-            "list_fees 的 get_fee_detail 溯源 → 派生运费单；确认门届时=内核自平核对 "
-            "proposal（同 UE 对账契约）")
+        """运费单列表：按（承运商, 期间）归集内核费用行。
+
+        归集只认**费用行 refs 里带承运商**的行（`list_fees` 每行带 `refs`，即计费时
+        传入的 `document_refs`）。没有承运商维度的费用不进运费单——宁可空，也不编。
+        越域不出现在列表里：查询恒带调用方承运商身份。
+        """
+        q = request.query_params
+        offset, limit = parse_page_params(q.get("offset"), q.get("limit"))
+        period = (q.get("period") or "").strip() or None
+        out = d.freight.statements(carrier=ctx["carrier"], period=period)
+        return list_shell(out["rows"], offset=offset, limit=limit, extra={
+            "note": out["note"],
+            "truncated": out["truncated"],
+            "caliber_note": "运费单=内核费用行按（承运商,期间）归集，红冲行按负额"
+                            "自然抵消；单据号 FS-<carrier>-<period>",
+            "source_note": "费用行来自内核计费（费用行 refs 带承运商才可归集）；"
+                           "本端只读归集，不另存一份运费单状态",
+        })
 
     @app.get("/erp/supply-chain/v1/cp/freight-statements/{statement_id}")
     async def cp_freight_detail(statement_id: str,
                                 ctx: dict = Depends(cp_route(
                                     "freight.statement.read"))):
-        raise _not_implemented(_CP_FREIGHT_501,
-                               "planned_lane: 同 GET /cp/freight-statements")
+        """运费单明细：按运单聚合，每行带费用溯源（费用项/规则版本/单据引用）。
+
+        越域按 **404**（不是 403）：非本承运商的单号不确认其存在。
+        """
+        detail = d.freight.statement(statement_id)  # 不存在 → NOT_FOUND(404)
+        if str(detail.get("carrier") or "") != ctx["carrier"]:
+            raise ApiError("NOT_FOUND", f"运费单不存在：{statement_id}",
+                           detail={"statementId": statement_id})
+        return ok_shell(detail)
 
     @app.post("/erp/supply-chain/v1/cp/freight-statements/{statement_id}/confirm")
     async def cp_freight_confirm(statement_id: str, body: dict[str, Any],
                                  ctx: dict = Depends(cp_route(
                                      "freight.statement.read"))):
-        raise _not_implemented(
-            _CP_FREIGHT_501,
-            "planned_lane: 运费单 read 面到位后确认门=内核自平核对 proposal"
-            "（超时/失败不假报成功）；异议进处置车道")
+        """确认/异议一张运费单：落库形态是**内核自平核对 proposal**（借贷同额、净额
+        为零，不动任何余额），由确认门拍板 —— 本端不落任何运费单状态。
+
+        - 驳回必须写原因（`note`）；
+        - 重复确认/改判 → 409 WORKFLOW_STATE（如实冲突，不静默覆盖）；
+        - 超时/失败不假报成功。
+        """
+        detail = d.freight.statement(statement_id)
+        if str(detail.get("carrier") or "") != ctx["carrier"]:
+            raise ApiError("NOT_FOUND", f"运费单不存在：{statement_id}",
+                           detail={"statementId": statement_id})
+        out = d.freight.confirm(
+            statement_id, str(body.get("decision") or ""),
+            note=(str(body.get("note") or "").strip() or None),
+            confirmed_by=f"cp:{ctx['carrier']}")
+        out["decision_note"] = ("确认结论经内核自平核对 proposal 车道（净额为零，"
+                                "不动余额），由确认门拍板；驳回进异议处置")
+        return ok_shell(out)
 
     # 契约 §7：AI 助手入口无独立端点（复用底座 chat/WS 面）。

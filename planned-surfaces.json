@@ -5,9 +5,9 @@
     "fd_erp_vertical_api/app.py",
     "fd_erp_vertical_api/faces.py"
   ],
-  "count": 11,
+  "count": 8,
   "by_capability": {
-    "supply-chain.cp": 4,
+    "supply-chain.cp": 1,
     "supply-chain.se": 1,
     "supply-chain.sp": 6
   },
@@ -22,39 +22,6 @@
       "error_code": "NOT_IMPLEMENTED",
       "planned_lane": "仓库作业编排月台资源建模（时段目录 + 占用计算）",
       "source": "fd_erp_vertical_api/faces.py:1150"
-    },
-    {
-      "method": "GET",
-      "path": "/erp/supply-chain/v1/cp/freight-statements",
-      "capability": "supply-chain.cp",
-      "domain": "freight-statements",
-      "grant": "freight.statement.read",
-      "http_status": 501,
-      "error_code": "NOT_IMPLEMENTED",
-      "planned_lane": "先把承运商引用落到能归集的载体上（运单/派车记录进内核事件 refs，或由计费规则按 waybill 反查承运商）→ 再按 carrier 归集 list_fees 的 get_fee_detail 溯源 → 派生运费单；确认门届时=内核自平核对 proposal（同 UE 对账契约）",
-      "source": "fd_erp_vertical_api/faces.py:1274"
-    },
-    {
-      "method": "GET",
-      "path": "/erp/supply-chain/v1/cp/freight-statements/{statement_id}",
-      "capability": "supply-chain.cp",
-      "domain": "freight-statements",
-      "grant": "freight.statement.read",
-      "http_status": 501,
-      "error_code": "NOT_IMPLEMENTED",
-      "planned_lane": "同 GET /cp/freight-statements",
-      "source": "fd_erp_vertical_api/faces.py:1285"
-    },
-    {
-      "method": "POST",
-      "path": "/erp/supply-chain/v1/cp/freight-statements/{statement_id}/confirm",
-      "capability": "supply-chain.cp",
-      "domain": "freight-statements",
-      "grant": "freight.statement.read",
-      "http_status": 501,
-      "error_code": "NOT_IMPLEMENTED",
-      "planned_lane": "运费单 read 面到位后确认门=内核自平核对 proposal（超时/失败不假报成功）；异议进处置车道",
-      "source": "fd_erp_vertical_api/faces.py:1292"
     },
     {
       "method": "POST",
