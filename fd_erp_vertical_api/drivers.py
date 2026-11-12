@@ -25,6 +25,7 @@ from fd_erp_vertical_templates.freight import FreightStatementLane
 from fd_erp_vertical_templates.inventory import InventoryLane
 from fd_erp_vertical_templates.masterdata import MasterData
 from fd_erp_vertical_templates.assets import FixedAssetLane
+from fd_erp_vertical_templates.budget import BudgetBook
 from fd_erp_vertical_templates.cost import CostEngine
 from fd_erp_vertical_templates.policy import PolicyBook
 from fd_erp_vertical_templates.orchestration import (AfterSalesOrchestrator,
@@ -79,6 +80,8 @@ class Drivers:
     cost: CostEngine
     #: 固定资产车道：登记→折旧计划→期末计提（pending proposal 走确认门）→净值。
     assets: FixedAssetLane
+    #: 预算控制车道：承诺由本层记（带维度），实际从内核分录按科目只读汇总。
+    budget: BudgetBook
     wms: WmsSnapshotAdapter
     disposal: ThresholdEvaluator
     #: 内核工具面实现（形态无关）。数量面只读查询直接经它——库存余额是内核的派生
@@ -131,12 +134,15 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                       base_currency=settings.base_currency)
     # 固定资产车道：计提只出待确认 proposal（借费用 / 贷 1602），过门后由内核落账。
     assets = FixedAssetLane(settings.tenant_id, data_dir, kernel, policy)
+    # 预算控制：维度/粒度/控制方式全读册；实际值只到科目层（内核分录无维度列）。
+    budget = BudgetBook(settings.tenant_id, data_dir, kernel, policy)
     disposal = ThresholdEvaluator(settings.tenant_id, data_dir)
     return Drivers(tenant_id=settings.tenant_id, master=master, pricing=pricing,
                    orders=orders, aftersales=aftersales, crm=crm,
                    invoices=invoices, procurement=procurement,
                    fulfillment=fulfillment, freight=freight,
                    inventory=inventory, policy=policy, cost=cost, assets=assets,
+                   budget=budget,
                    wms=wms, disposal=disposal, kernel=kernel)
 
 
