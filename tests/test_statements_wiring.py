@@ -122,3 +122,38 @@ def test_cash_flow_self_proves_on_real_entries(client_faces):
     assert cf["openingCash"] == "0.00"
     assert cf["closingCash"] == cf["netIncrease"] == "1500.00"
     assert cf["internal"] == [] and "unclassified" not in cf
+
+
+def test_indirect_method_reconciles_with_direct_on_real_entries(client_faces):
+    """补充资料：真库落现销 / 赊销 / 付现费用 / 折旧，间接法必须与直接法相等。"""
+    d = client_faces.app.state.drivers
+    _approve_arrival_rule(client_faces.app.state.settings)
+    _seed_one_month(d)          # 费用 1000 付现 + 折旧 1000 + 到货/结转（非现金）
+
+    for stable_id, lines in (
+        ("cf:ind-sale", [{"account_code": "1000", "direction": "debit", "amount": "3000",
+                          "currency": "CNY"},
+                         {"account_code": "4000", "direction": "credit", "amount": "3000",
+                          "currency": "CNY"}]),
+        ("cf:ind-credit", [{"account_code": "1100", "direction": "debit", "amount": "2000",
+                            "currency": "CNY"},
+                           {"account_code": "4000", "direction": "credit", "amount": "2000",
+                            "currency": "CNY"}]),
+    ):
+        prop = d.kernel.submit_proposal(stable_id, lines, booked_on="2026-11-10")
+        d.kernel.confirm_proposal(proposal_id=prop["proposal_id"], confirmed_by="cfo")
+
+    ind = d.statements.cash_flow_indirect("2026-11")
+    assert ind["consistent"] is True, ind.get("error")
+    assert ind["indirectOperating"] == ind["directOperating"]
+    assert Decimal(ind["difference"]) == 0
+    # 净利润 5000 − 成本 400 − 费用 1000 − 折旧 1000 = 2600
+    assert ind["netProfit"] == "2600.00"
+    assert {r["line"]: r["amount"] for r in ind["adjustments"]}["固定资产折旧"] == "1000.00"
+    assert {r["accountCode"]: r["change"]
+            for r in ind["workingCapital"]}["1100"] == "2000.00"
+    # 营运资本：应收 +2000、存货 +600（到货 1000 − 结转 400）、应付 −1000 → 占用 1600
+    assert {r["accountCode"]: r["change"]
+            for r in ind["workingCapital"]}["1200"] == "600.00"
+    assert ind["workingCapitalTotal"] == "1600.00"
+    assert ind["indirectOperating"] == "2000.00"    # 2600 + 1000 − 1600
