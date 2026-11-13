@@ -33,6 +33,9 @@ from fd_erp_vertical_templates.comparison import ReportComparison
 from fd_erp_vertical_templates.fx_revaluation import FxRevaluation
 from fd_erp_vertical_templates.opening import OpeningBalances
 from fd_erp_vertical_templates.manufacturing import ManufacturingLane
+from fd_erp_vertical_templates.cn_tax import CnVatLane
+from fd_erp_vertical_templates.cn_statements import CnStatements
+from fd_erp_vertical_templates.localization import CnPack
 from fd_erp_vertical_templates.month_end import MonthEndChecklist
 from .periods import PeriodBook
 from fd_erp_vertical_templates.assets import FixedAssetLane
@@ -119,6 +122,10 @@ class Drivers:
     books: LedgerBooks
     #: 生产工单：BOM 展开 → 领料进在制品（1401）→ 完工转成品（1200）。
     manufacturing: ManufacturingLane
+    #: 增值税：销项/进项计提（税率封闭集）→ 月末转出未交增值税。
+    cn_tax: CnVatLane
+    #: 中国法定报表：小企业准则资产负债表/利润表 + 增值税申报口径。
+    cn_statements: CnStatements
     #: 期末损益结转：逐科目结平 + 差额入 3100（只出待确认；分录带 close: 前缀）。
     closing: PeriodClosing
     #: 月结清单：结转成本 → 折旧 → 减值三步准备 + 结转损益（只出待确认），无待办才关账。
@@ -204,6 +211,14 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 生产工单：BOM/工单/领料/完工都是台账事实，落账一律走待确认 proposal。
     manufacturing = ManufacturingLane(settings.tenant_id, data_dir, kernel,
                                       base_currency=settings.base_currency)
+    # 中国国别包：科目表/税码/映射/报表项目都是数据（Odoo l10n_cn 出处见 PROVENANCE）。
+    cn_pack = CnPack()
+    # 增值税：只出待确认提案；月末把「销项 − 进项」转到未交增值税。
+    cn_tax = CnVatLane(settings.tenant_id, kernel,
+                       base_currency=settings.base_currency, pack=cn_pack)
+    # 法定报表：按准则项目聚合，漏项要点名（complete 与 balanced 是两个判断）。
+    cn_statements = CnStatements(settings.tenant_id, kernel, pack=cn_pack,
+                                 base_currency=settings.base_currency)
     # 建账期初：只在空账上录、只此一次；它定义的是「账本开始之前」的余额。
     opening = OpeningBalances(settings.tenant_id, kernel,
                               base_currency=settings.base_currency)
@@ -231,7 +246,8 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                    statements=statements, receivables=receivables,
                    payables=payables, periods=period_book,
                    bad_debts=bad_debts, consolidation=consolidation,
-                   comparison=comparison, manufacturing=manufacturing,
+                   comparison=comparison, manufacturing=manufacturing, cn_tax=cn_tax,
+                   cn_statements=cn_statements,
                    opening=opening, fx_revaluation=fx_revaluation,
                    books=books, closing=closing,
                    month_end=month_end,
