@@ -92,3 +92,33 @@ def test_statements_balance_on_real_entries(client_faces):
     # 未标注维度的费用有两笔：成本结转 400（5000）与折旧 1000（5200）
     assert rows["unattributed"] == "1400.00"
     assert dim["total"] == "2400.00"
+
+
+def test_cash_flow_self_proves_on_real_entries(client_faces):
+    """四表装配：真库落费用付现 / 销售收现 / 购置固定资产，三类净额之和 == 期末 − 期初。"""
+    d = client_faces.app.state.drivers
+    _approve_arrival_rule(client_faces.app.state.settings)
+    _seed_one_month(d)          # 费用 1000 付现；到货/结转/折旧都不过现金
+
+    for stable_id, lines in (
+        ("cf:sale", [{"account_code": "1000", "direction": "debit", "amount": "3000",
+                      "currency": "CNY"},
+                     {"account_code": "4000", "direction": "credit", "amount": "3000",
+                      "currency": "CNY"}]),
+        ("cf:fa", [{"account_code": "1601", "direction": "debit", "amount": "500",
+                    "currency": "CNY"},
+                   {"account_code": "1000", "direction": "credit", "amount": "500",
+                    "currency": "CNY"}]),
+    ):
+        prop = d.kernel.submit_proposal(stable_id, lines, booked_on="2026-11-10")
+        d.kernel.confirm_proposal(proposal_id=prop["proposal_id"], confirmed_by="cfo")
+
+    cf = d.statements.cash_flow("2026-11")
+    assert cf["consistent"] is True, cf.get("error")
+    assert Decimal(cf["categorizedNet"]) == Decimal(cf["netIncrease"])
+    assert cf["categories"]["operating"]["net"] == "2000.00"    # 收现 3000 − 费用 1000
+    assert cf["categories"]["investing"]["net"] == "-500.00"
+    assert cf["categories"]["financing"]["lines"] == []
+    assert cf["openingCash"] == "0.00"
+    assert cf["closingCash"] == cf["netIncrease"] == "1500.00"
+    assert cf["internal"] == [] and "unclassified" not in cf
