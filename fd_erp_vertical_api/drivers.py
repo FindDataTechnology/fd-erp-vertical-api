@@ -32,6 +32,7 @@ from fd_erp_vertical_templates.closing import PeriodClosing
 from fd_erp_vertical_templates.comparison import ReportComparison
 from fd_erp_vertical_templates.fx_revaluation import FxRevaluation
 from fd_erp_vertical_templates.opening import OpeningBalances
+from fd_erp_vertical_templates.manufacturing import ManufacturingLane
 from fd_erp_vertical_templates.month_end import MonthEndChecklist
 from .periods import PeriodBook
 from fd_erp_vertical_templates.assets import FixedAssetLane
@@ -116,6 +117,8 @@ class Drivers:
     opening: OpeningBalances
     #: 账簿：科目余额表（期初/本期借/本期贷/期末三栏）与明细账（逐行余额）。
     books: LedgerBooks
+    #: 生产工单：BOM 展开 → 领料进在制品（1401）→ 完工转成品（1200）。
+    manufacturing: ManufacturingLane
     #: 期末损益结转：逐科目结平 + 差额入 3100（只出待确认；分录带 close: 前缀）。
     closing: PeriodClosing
     #: 月结清单：结转成本 → 折旧 → 减值三步准备 + 结转损益（只出待确认），无待办才关账。
@@ -192,6 +195,9 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 合并：主体结构人工登记，取数按 entity 维度，抵销按内部往来科目对。
     consolidation = ConsolidationBook(settings.tenant_id, data_dir, kernel, policy,
                                       base_currency=settings.base_currency)
+    # 生产工单：BOM/工单/领料/完工都是台账事实，落账一律走待确认 proposal。
+    manufacturing = ManufacturingLane(settings.tenant_id, data_dir, kernel,
+                                      base_currency=settings.base_currency)
     # 期末调汇：期末汇率人工登记（外部事实），本层只做算术并出待确认提案。
     fx_revaluation = FxRevaluation(settings.tenant_id, data_dir, kernel,
                                    base_currency=settings.base_currency)
@@ -222,7 +228,7 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                    statements=statements, receivables=receivables,
                    payables=payables, periods=period_book,
                    bad_debts=bad_debts, consolidation=consolidation,
-                   comparison=comparison,
+                   comparison=comparison, manufacturing=manufacturing,
                    opening=opening, fx_revaluation=fx_revaluation,
                    books=books, closing=closing,
                    month_end=month_end,
