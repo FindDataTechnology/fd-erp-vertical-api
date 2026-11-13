@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
 
 def test_drivers_expose_budget_and_flip_the_policy_keys(client_faces):
     d = client_faces.app.state.drivers
@@ -60,3 +62,28 @@ def test_budget_actual_reads_the_kernel_not_the_commitments(client_faces):
     assert row["committed"] == "3000.000000"            # 承诺仍在，两者分列
     assert after["totals"]["actual"] == "1200.000000"
     assert "按同一维度汇总" in after["caliber_note"]
+
+
+def test_budget_execution_table_on_real_ledger(client_faces):
+    """整表执行：登记预算 → 承诺 → 真库落账 → 双执行率与预警。"""
+    d = client_faces.app.state.drivers
+    d.budget.set_budget("D-01", "5200", "2026-11", "10000", approved_by="cfo")
+    d.budget.commit("D-01", "5200", "3000", ref="PO-EXEC-1",
+                    occurred_on="2026-11-05")
+    prop = d.kernel.submit_proposal("exec:exp", [
+        {"account_code": "5200", "direction": "debit", "amount": "2500",
+         "currency": "CNY"},
+        {"account_code": "1000", "direction": "credit", "amount": "2500",
+         "currency": "CNY"}], dimensions={"cost_center": "D-01"},
+        booked_on="2026-11-06")
+    d.kernel.confirm_proposal(proposal_id=prop["proposal_id"], confirmed_by="cfo")
+
+    out = d.budget.execution("2026-11")
+    row = next(r for r in out["rows"]
+               if (r["dimensionValue"], r["accountCode"]) == ("D-01", "5200"))
+    assert row["budgetRegistered"] is True
+    assert Decimal(row["committedRate"]) == Decimal("0.3")
+    assert Decimal(row["actualRate"]) == Decimal("0.25")
+    assert Decimal(row["remaining"]) == Decimal("7000")
+    assert row["level"] == "ok" and out["alerts"] == []
+    assert out["unbudgeted"] == []
