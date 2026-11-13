@@ -70,3 +70,23 @@ def test_last_year_basis(client_faces):
     rows = {r["key"]: r for r in out["statements"]["incomeStatement"]["rows"]}
     assert rows["营业收入"]["change"] == "400.00"
     assert rows["营业收入"]["ratio"] == "80.00%"
+
+
+def test_ytd_accumulates_against_the_same_months_last_year(client_faces):
+    d = client_faces.app.state.drivers
+    _sale_and_expense(d, "2025-01", "1000", "200")
+    _sale_and_expense(d, "2026-01", "2000", "400")
+    _sale_and_expense(d, "2026-02", "2500", "500")
+
+    out = d.comparison.compare("2026-02", "ytd")
+    assert out["periodRange"] == ["2026-01", "2026-02"]
+    assert out["baselineRange"] == ["2025-01", "2025-02"]
+    rows = {r["key"]: r for r in out["statements"]["incomeStatement"]["rows"]}
+    assert rows["营业收入"]["current"] == "4500.00"      # 1+2 月
+    assert rows["营业收入"]["baseline"] == "1000.00"     # 去年只有 1 月有数
+    assert rows["营业收入"]["change"] == "3500.00"
+    assert out["statements"]["balanceSheet"]["notApplicable"] is True
+
+    cash = {r["key"]: r for r in out["statements"]["cashFlow"]["rows"]}
+    assert cash["operating"]["current"] == "3600.00"     # (2000-400)+(2500-500)
+    assert out["statements"]["cashFlow"]["consistent"] is True
