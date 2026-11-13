@@ -48,9 +48,10 @@ def test_taxed_month_closes_the_cn_books(client_faces):
     assert inc["totals"]["netProfit"] == "-100.00"
 
     vat = d.cn_statements.vat_return("2026-11")
+    # 应纳下限为 0：留抵是「结转下期」而不是负应纳（change: add-cn-vat-credit-carry-forward）
     assert vat["ledger"] == {"sales": "100.00", "outputVat": "13.00",
                              "inputVat": "26.00", "inputTransferOut": "0.00",
-                             "payable": "-13.00"}
+                             "openingCredit": "0.00", "payable": "0.00"}
     # 进项大于销项：留抵，不结转；重复调用仍 noop
     closed = d.cn_tax.close_vat("2026-11")
     assert closed["noop"] is True
