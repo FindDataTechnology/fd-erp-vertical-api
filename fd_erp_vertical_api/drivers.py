@@ -29,6 +29,7 @@ from fd_erp_vertical_templates.bad_debt import BadDebtLane
 from fd_erp_vertical_templates.consolidation import ConsolidationBook
 from fd_erp_vertical_templates.books import LedgerBooks
 from fd_erp_vertical_templates.closing import PeriodClosing
+from fd_erp_vertical_templates.fx_revaluation import FxRevaluation
 from fd_erp_vertical_templates.opening import OpeningBalances
 from fd_erp_vertical_templates.month_end import MonthEndChecklist
 from .periods import PeriodBook
@@ -106,6 +107,8 @@ class Drivers:
     bad_debts: BadDebtLane
     #: 合并报表：按 entity 维度分主体取数 + 内部往来抵销 + 平衡断言（工作底稿）。
     consolidation: ConsolidationBook
+    #: 期末调汇：登记期末汇率 → 外币货币性项目重述 → 差额入 6603（只出待确认）。
+    fx_revaluation: FxRevaluation
     #: 建账期初余额：借贷必平、只此一次、仅限空账（一次性建账事实）。
     opening: OpeningBalances
     #: 账簿：科目余额表（期初/本期借/本期贷/期末三栏）与明细账（逐行余额）。
@@ -186,6 +189,9 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 合并：主体结构人工登记，取数按 entity 维度，抵销按内部往来科目对。
     consolidation = ConsolidationBook(settings.tenant_id, data_dir, kernel, policy,
                                       base_currency=settings.base_currency)
+    # 期末调汇：期末汇率人工登记（外部事实），本层只做算术并出待确认提案。
+    fx_revaluation = FxRevaluation(settings.tenant_id, data_dir, kernel,
+                                   base_currency=settings.base_currency)
     # 建账期初：只在空账上录、只此一次；它定义的是「账本开始之前」的余额。
     opening = OpeningBalances(settings.tenant_id, kernel,
                               base_currency=settings.base_currency)
@@ -209,7 +215,8 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                    statements=statements, receivables=receivables,
                    payables=payables, periods=period_book,
                    bad_debts=bad_debts, consolidation=consolidation,
-                   opening=opening, books=books, closing=closing,
+                   opening=opening, fx_revaluation=fx_revaluation,
+                   books=books, closing=closing,
                    month_end=month_end,
                    wms=wms, disposal=disposal, kernel=kernel)
 
