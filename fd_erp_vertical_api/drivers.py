@@ -36,6 +36,7 @@ from fd_erp_vertical_templates.manufacturing import ManufacturingLane
 from fd_erp_vertical_templates.cn_tax import CnVatLane
 from fd_erp_vertical_templates.cn_statements import CnStatements
 from fd_erp_vertical_templates.cn_invoice import CnInvoiceBook
+from fd_erp_vertical_templates.cn_filing import CnFilingLane
 from fd_erp_vertical_templates.localization import CnPack
 from fd_erp_vertical_templates.month_end import MonthEndChecklist
 from .periods import PeriodBook
@@ -129,6 +130,8 @@ class Drivers:
     cn_statements: CnStatements
     #: 发票台账：票种 + 认证决定进项抵扣资格（普票不可抵）；采购过账按台账判定。
     cn_invoices: CnInvoiceBook
+    #: 附加税与所得税预缴：基数分别是应纳增值税与本年累计利润总额，同期间幂等、跨期只补差。
+    cn_filing: CnFilingLane
     #: 期末损益结转：逐科目结平 + 差额入 3100（只出待确认；分录带 close: 前缀）。
     closing: PeriodClosing
     #: 月结清单：结转成本 → 折旧 → 减值三步准备 + 结转损益（只出待确认），无待办才关账。
@@ -225,6 +228,11 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 发票台账：抵扣资格由票种 + 认证共同决定；不可抵的税进成本。
     cn_invoices = CnInvoiceBook(settings.tenant_id, data_dir, kernel,
                                 lane=cn_tax, base_currency=settings.base_currency)
+    # 附加税/所得税：复用上面那份增值税车道与法定报表（不同源就会算出两份口径）。
+    # 税率是外部事实（地区/政策不同），由 register_rates 人工登记并带出处。
+    cn_filing = CnFilingLane(settings.tenant_id, data_dir, kernel, vat=cn_tax,
+                             statements=cn_statements,
+                             base_currency=settings.base_currency)
     # 建账期初：只在空账上录、只此一次；它定义的是「账本开始之前」的余额。
     opening = OpeningBalances(settings.tenant_id, kernel,
                               base_currency=settings.base_currency)
@@ -254,7 +262,7 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                    bad_debts=bad_debts, consolidation=consolidation,
                    comparison=comparison, manufacturing=manufacturing, cn_tax=cn_tax,
                    cn_statements=cn_statements,
-                   cn_invoices=cn_invoices,
+                   cn_invoices=cn_invoices, cn_filing=cn_filing,
                    opening=opening, fx_revaluation=fx_revaluation,
                    books=books, closing=closing,
                    month_end=month_end,
