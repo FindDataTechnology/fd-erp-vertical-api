@@ -192,15 +192,18 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 坏账计提：基数取应收账龄（同一套 FIFO/维度），费率本层登记，方法读口径册。
     bad_debts = BadDebtLane(settings.tenant_id, data_dir, kernel, policy,
                             aging=receivables)
-    # 合并：主体结构人工登记，取数按 entity 维度，抵销按内部往来科目对。
+    # 期末调汇：期末汇率人工登记（外部事实），本层只做算术并出待确认提案。
+    # 先于合并构造：折算与调汇共用同一张汇率登记表（同来源、同出处要求）。
+    fx_revaluation = FxRevaluation(settings.tenant_id, data_dir, kernel,
+                                   base_currency=settings.base_currency)
+    # 合并：主体结构人工登记，取数按 entity 维度，抵销按内部往来科目对；
+    # 外币主体先按口径折算再抵销（fx 注入即同一张汇率表）。
     consolidation = ConsolidationBook(settings.tenant_id, data_dir, kernel, policy,
-                                      base_currency=settings.base_currency)
+                                      base_currency=settings.base_currency,
+                                      fx=fx_revaluation)
     # 生产工单：BOM/工单/领料/完工都是台账事实，落账一律走待确认 proposal。
     manufacturing = ManufacturingLane(settings.tenant_id, data_dir, kernel,
                                       base_currency=settings.base_currency)
-    # 期末调汇：期末汇率人工登记（外部事实），本层只做算术并出待确认提案。
-    fx_revaluation = FxRevaluation(settings.tenant_id, data_dir, kernel,
-                                   base_currency=settings.base_currency)
     # 建账期初：只在空账上录、只此一次；它定义的是「账本开始之前」的余额。
     opening = OpeningBalances(settings.tenant_id, kernel,
                               base_currency=settings.base_currency)

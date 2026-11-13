@@ -79,6 +79,10 @@ def test_foreign_currency_entity_is_not_wired(client_faces):
     d.consolidation.register_entity("E-U", "海外子公司",
                                     functional_currency="USD",
                                     registered_by="cfo")
+    # 空主体不拒：没有分录就没有可折算的东西，折算口径无从谈起。
+    assert d.consolidation.report("2026-11")["balanced"] is True
+    _sale(d, "grp:u-sale", "1000", "E-U")
     with pytest.raises(Exception) as ei:
         d.consolidation.report("2026-11")
     assert getattr(ei.value, "code", None) == "NOT_WIRED"
+    assert "fx_translation" in ei.value.detail["fix"]
