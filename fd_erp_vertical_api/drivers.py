@@ -25,6 +25,7 @@ from fd_erp_vertical_templates.freight import FreightStatementLane
 from fd_erp_vertical_templates.inventory import InventoryLane
 from fd_erp_vertical_templates.masterdata import MasterData
 from fd_erp_vertical_templates.aging import PayableAging, ReceivableAging
+from fd_erp_vertical_templates.bad_debt import BadDebtLane
 from .periods import PeriodBook
 from fd_erp_vertical_templates.assets import FixedAssetLane
 from fd_erp_vertical_templates.budget import BudgetBook
@@ -96,6 +97,8 @@ class Drivers:
     payables: PayableAging
     #: 期间关账：关/重开/查状态/复算核对（期间语义全在内核，本层只绑定）。
     periods: PeriodBook
+    #: 应收减值：按账龄分档计提坏账准备（增量入账，口径在册、费率人工登记）。
+    bad_debts: BadDebtLane
     wms: WmsSnapshotAdapter
     disposal: ThresholdEvaluator
     #: 内核工具面实现（形态无关）。数量面只读查询直接经它——库存余额是内核的派生
@@ -162,6 +165,9 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     payables = PayableAging(settings.tenant_id, kernel,
                             base_currency=settings.base_currency)
     period_book = PeriodBook(kernel)
+    # 坏账计提：基数取应收账龄（同一套 FIFO/维度），费率本层登记，方法读口径册。
+    bad_debts = BadDebtLane(settings.tenant_id, data_dir, kernel, policy,
+                            aging=receivables)
     disposal = ThresholdEvaluator(settings.tenant_id, data_dir)
     return Drivers(tenant_id=settings.tenant_id, master=master, pricing=pricing,
                    orders=orders, aftersales=aftersales, crm=crm,
@@ -171,6 +177,7 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                    budget=budget, invoice_receipts=invoice_receipts,
                    statements=statements, receivables=receivables,
                    payables=payables, periods=period_book,
+                   bad_debts=bad_debts,
                    wms=wms, disposal=disposal, kernel=kernel)
 
 
