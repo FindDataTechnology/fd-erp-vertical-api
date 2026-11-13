@@ -29,6 +29,7 @@ from fd_erp_vertical_templates.bad_debt import BadDebtLane
 from fd_erp_vertical_templates.consolidation import ConsolidationBook
 from fd_erp_vertical_templates.books import LedgerBooks
 from fd_erp_vertical_templates.closing import PeriodClosing
+from fd_erp_vertical_templates.opening import OpeningBalances
 from fd_erp_vertical_templates.month_end import MonthEndChecklist
 from .periods import PeriodBook
 from fd_erp_vertical_templates.assets import FixedAssetLane
@@ -105,6 +106,8 @@ class Drivers:
     bad_debts: BadDebtLane
     #: 合并报表：按 entity 维度分主体取数 + 内部往来抵销 + 平衡断言（工作底稿）。
     consolidation: ConsolidationBook
+    #: 建账期初余额：借贷必平、只此一次、仅限空账（一次性建账事实）。
+    opening: OpeningBalances
     #: 账簿：科目余额表（期初/本期借/本期贷/期末三栏）与明细账（逐行余额）。
     books: LedgerBooks
     #: 期末损益结转：逐科目结平 + 差额入 3100（只出待确认；分录带 close: 前缀）。
@@ -183,6 +186,9 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 合并：主体结构人工登记，取数按 entity 维度，抵销按内部往来科目对。
     consolidation = ConsolidationBook(settings.tenant_id, data_dir, kernel, policy,
                                       base_currency=settings.base_currency)
+    # 建账期初：只在空账上录、只此一次；它定义的是「账本开始之前」的余额。
+    opening = OpeningBalances(settings.tenant_id, kernel,
+                              base_currency=settings.base_currency)
     # 账簿：与报表同源（同一批分录），所以「余额表期末 == 试算表余额」是可验的恒等式。
     books = LedgerBooks(settings.tenant_id, kernel,
                         base_currency=settings.base_currency)
@@ -203,7 +209,8 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                    statements=statements, receivables=receivables,
                    payables=payables, periods=period_book,
                    bad_debts=bad_debts, consolidation=consolidation,
-                   books=books, closing=closing, month_end=month_end,
+                   opening=opening, books=books, closing=closing,
+                   month_end=month_end,
                    wms=wms, disposal=disposal, kernel=kernel)
 
 
