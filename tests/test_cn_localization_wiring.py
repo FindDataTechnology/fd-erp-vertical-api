@@ -49,7 +49,8 @@ def test_taxed_month_closes_the_cn_books(client_faces):
 
     vat = d.cn_statements.vat_return("2026-11")
     assert vat["ledger"] == {"sales": "100.00", "outputVat": "13.00",
-                             "inputVat": "26.00", "payable": "-13.00"}
+                             "inputVat": "26.00", "inputTransferOut": "0.00",
+                             "payable": "-13.00"}
     # 进项大于销项：留抵，不结转；重复调用仍 noop
     closed = d.cn_tax.close_vat("2026-11")
     assert closed["noop"] is True
