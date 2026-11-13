@@ -26,6 +26,7 @@ from fd_erp_vertical_templates.inventory import InventoryLane
 from fd_erp_vertical_templates.masterdata import MasterData
 from fd_erp_vertical_templates.aging import PayableAging, ReceivableAging
 from fd_erp_vertical_templates.bad_debt import BadDebtLane
+from fd_erp_vertical_templates.consolidation import ConsolidationBook
 from .periods import PeriodBook
 from fd_erp_vertical_templates.assets import FixedAssetLane
 from fd_erp_vertical_templates.budget import BudgetBook
@@ -99,6 +100,8 @@ class Drivers:
     periods: PeriodBook
     #: 应收减值：按账龄分档计提坏账准备（增量入账，口径在册、费率人工登记）。
     bad_debts: BadDebtLane
+    #: 合并报表：按 entity 维度分主体取数 + 内部往来抵销 + 平衡断言（工作底稿）。
+    consolidation: ConsolidationBook
     wms: WmsSnapshotAdapter
     disposal: ThresholdEvaluator
     #: 内核工具面实现（形态无关）。数量面只读查询直接经它——库存余额是内核的派生
@@ -168,6 +171,9 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 坏账计提：基数取应收账龄（同一套 FIFO/维度），费率本层登记，方法读口径册。
     bad_debts = BadDebtLane(settings.tenant_id, data_dir, kernel, policy,
                             aging=receivables)
+    # 合并：主体结构人工登记，取数按 entity 维度，抵销按内部往来科目对。
+    consolidation = ConsolidationBook(settings.tenant_id, data_dir, kernel, policy,
+                                      base_currency=settings.base_currency)
     disposal = ThresholdEvaluator(settings.tenant_id, data_dir)
     return Drivers(tenant_id=settings.tenant_id, master=master, pricing=pricing,
                    orders=orders, aftersales=aftersales, crm=crm,
@@ -177,7 +183,7 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                    budget=budget, invoice_receipts=invoice_receipts,
                    statements=statements, receivables=receivables,
                    payables=payables, periods=period_book,
-                   bad_debts=bad_debts,
+                   bad_debts=bad_debts, consolidation=consolidation,
                    wms=wms, disposal=disposal, kernel=kernel)
 
 
