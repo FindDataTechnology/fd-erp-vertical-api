@@ -35,6 +35,7 @@ from fd_erp_vertical_templates.opening import OpeningBalances
 from fd_erp_vertical_templates.manufacturing import ManufacturingLane
 from fd_erp_vertical_templates.cn_tax import CnVatLane
 from fd_erp_vertical_templates.cn_statements import CnStatements
+from fd_erp_vertical_templates.cn_invoice import CnInvoiceBook
 from fd_erp_vertical_templates.localization import CnPack
 from fd_erp_vertical_templates.month_end import MonthEndChecklist
 from .periods import PeriodBook
@@ -126,6 +127,8 @@ class Drivers:
     cn_tax: CnVatLane
     #: 中国法定报表：小企业准则资产负债表/利润表 + 增值税申报口径。
     cn_statements: CnStatements
+    #: 发票台账：票种 + 认证决定进项抵扣资格（普票不可抵）；采购过账按台账判定。
+    cn_invoices: CnInvoiceBook
     #: 期末损益结转：逐科目结平 + 差额入 3100（只出待确认；分录带 close: 前缀）。
     closing: PeriodClosing
     #: 月结清单：结转成本 → 折旧 → 减值三步准备 + 结转损益（只出待确认），无待办才关账。
@@ -219,6 +222,9 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 法定报表：按准则项目聚合，漏项要点名（complete 与 balanced 是两个判断）。
     cn_statements = CnStatements(settings.tenant_id, kernel, pack=cn_pack,
                                  base_currency=settings.base_currency)
+    # 发票台账：抵扣资格由票种 + 认证共同决定；不可抵的税进成本。
+    cn_invoices = CnInvoiceBook(settings.tenant_id, data_dir, kernel,
+                                lane=cn_tax, base_currency=settings.base_currency)
     # 建账期初：只在空账上录、只此一次；它定义的是「账本开始之前」的余额。
     opening = OpeningBalances(settings.tenant_id, kernel,
                               base_currency=settings.base_currency)
@@ -248,6 +254,7 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                    bad_debts=bad_debts, consolidation=consolidation,
                    comparison=comparison, manufacturing=manufacturing, cn_tax=cn_tax,
                    cn_statements=cn_statements,
+                   cn_invoices=cn_invoices,
                    opening=opening, fx_revaluation=fx_revaluation,
                    books=books, closing=closing,
                    month_end=month_end,
