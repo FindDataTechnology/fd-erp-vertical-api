@@ -27,6 +27,7 @@ from fd_erp_vertical_templates.masterdata import MasterData
 from fd_erp_vertical_templates.aging import PayableAging, ReceivableAging
 from fd_erp_vertical_templates.bad_debt import BadDebtLane
 from fd_erp_vertical_templates.consolidation import ConsolidationBook
+from fd_erp_vertical_templates.books import LedgerBooks
 from fd_erp_vertical_templates.closing import PeriodClosing
 from fd_erp_vertical_templates.month_end import MonthEndChecklist
 from .periods import PeriodBook
@@ -104,6 +105,8 @@ class Drivers:
     bad_debts: BadDebtLane
     #: 合并报表：按 entity 维度分主体取数 + 内部往来抵销 + 平衡断言（工作底稿）。
     consolidation: ConsolidationBook
+    #: 账簿：科目余额表（期初/本期借/本期贷/期末三栏）与明细账（逐行余额）。
+    books: LedgerBooks
     #: 期末损益结转：逐科目结平 + 差额入 3100（只出待确认；分录带 close: 前缀）。
     closing: PeriodClosing
     #: 月结清单：结转成本 → 折旧 → 减值三步准备 + 结转损益（只出待确认），无待办才关账。
@@ -180,6 +183,9 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 合并：主体结构人工登记，取数按 entity 维度，抵销按内部往来科目对。
     consolidation = ConsolidationBook(settings.tenant_id, data_dir, kernel, policy,
                                       base_currency=settings.base_currency)
+    # 账簿：与报表同源（同一批分录），所以「余额表期末 == 试算表余额」是可验的恒等式。
+    books = LedgerBooks(settings.tenant_id, kernel,
+                        base_currency=settings.base_currency)
     # 期末结转：关账台账一并注入——已关期间的结转在提交前就被拒，不用等 DB 触发器。
     closing = PeriodClosing(settings.tenant_id, kernel, periods=period_book,
                             base_currency=settings.base_currency)
@@ -197,7 +203,7 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                    statements=statements, receivables=receivables,
                    payables=payables, periods=period_book,
                    bad_debts=bad_debts, consolidation=consolidation,
-                   closing=closing, month_end=month_end,
+                   books=books, closing=closing, month_end=month_end,
                    wms=wms, disposal=disposal, kernel=kernel)
 
 
