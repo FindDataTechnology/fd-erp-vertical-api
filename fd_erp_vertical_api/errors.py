@@ -61,6 +61,13 @@ ERROR_CATALOG: dict[str, ErrorCodeMeta] = {
         "CREDIT_NOT_REGISTERED", "invalid_argument", False,
         "该客户未在内核登记信用额度，无法受理订单；请运维登记额度（set_credit_limit）后重试。",
         409),
+    # ---- 期间关账（change: add-period-close）----
+    # 业务拒绝：期间已关账，业务日期落在该期的分录进不去。不是「服务炸了」，重试也无用——
+    # 要么先重开期间（带理由），要么在开放期间做冲正。
+    "PERIOD_CLOSED": ErrorCodeMeta(
+        "PERIOD_CLOSED", "invalid_argument", False,
+        "期间已关账，业务日期落在该期间的分录被拒；要改该期数字须先重开期间（带理由），"
+        "或在开放期间做冲正。", 409),
     # ---- 内核事件层复用码（change establish-erp-event-kernel）----
     # semantic_class / retryable / default_hint 必须与
     # fd_erp_ledger_mcp.error_codes.CATALOG 逐字一致（check_semantics_contract 的

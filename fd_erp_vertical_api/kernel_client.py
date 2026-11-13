@@ -50,7 +50,7 @@ class InProcessKernelClient:
     def submit_proposal(self, stable_id, lines, source_ref=None, kind="journal",
                         reversal_of=None, lane_fleet=None, lane_post=None,
                         lane_title=None, lane_target=None, tenant_id=None,
-                        dimensions=None, submitted_by="agent"):
+                        dimensions=None, submitted_by="agent", booked_on=None):
         proposals = self._kernel_mod("proposals")
         with self._connection() as conn:
             return proposals.submit_proposal(
@@ -59,7 +59,7 @@ class InProcessKernelClient:
                 kind=kind, reversal_of=reversal_of, lane_fleet=lane_fleet,
                 lane_post=lane_post, lane_title=lane_title,
                 lane_target=lane_target, dimensions=dimensions,
-                submitted_by=submitted_by)
+                submitted_by=submitted_by, booked_on=booked_on)
 
     def list_proposals(self, status=None, tenant_id=None, offset=0, limit=100):
         proposals = self._kernel_mod("proposals")
@@ -136,6 +136,43 @@ class InProcessKernelClient:
         engine = self._kernel_mod("recon.engine")
         tenant = self._recon_tenant(tenant_id)
         return engine.get_report(self._s, tenant, task_id)
+
+    # ---- 期间关账（add-period-close）----
+    #
+    # 关账是内核概念（期间台账、落账闸都在内核库里），模板层不另包一层——那层只会是
+    # 纯转发。生产 MCP 形态尚未开这几个工具，故只在内核同进程形态提供；缺位时由
+    # KernelProxy 报 NOT_WIRED，不伪造成功。
+
+    def _periods_mod(self):
+        return self._kernel_mod("periods")
+
+    def close_period(self, period, actor, note=None):
+        mod = self._periods_mod()
+        with self._connection() as conn:
+            return mod.close(conn, settings=self._s, tenant_id=self._tenant,
+                             period=period, actor=actor, note=note)
+
+    def reopen_period(self, period, actor, reason):
+        mod = self._periods_mod()
+        with self._connection() as conn:
+            return mod.reopen(conn, settings=self._s, tenant_id=self._tenant,
+                              period=period, actor=actor, reason=reason)
+
+    def period_status(self, period):
+        mod = self._periods_mod()
+        with self._connection() as conn:
+            return mod.status(conn, self._tenant, period)
+
+    def period_report(self, period):
+        mod = self._periods_mod()
+        with self._connection() as conn:
+            return mod.report(conn, settings=self._s, tenant_id=self._tenant,
+                              period=period)
+
+    def list_periods(self):
+        mod = self._periods_mod()
+        with self._connection() as conn:
+            return mod.list_periods(conn, self._tenant)
 
     # ---- 信用额度扩展（占用/释放/回冲由账本记账）----
 
@@ -427,6 +464,41 @@ class KernelProxy:
         except Exception as exc:  # noqa: BLE001 见 _raise_kernel_error
             _raise_kernel_error(exc, "decide_event")
         return _kernel_result(out, "decide_event")
+
+    # ---- 期间关账（add-period-close）：同样收口 ----
+    #
+    # 失败语义两条必须分清：期间已关账（PERIOD_CLOSED）是**业务拒绝**，让人先重开或改冲正；
+    # 「传输形态没有这个方法」是**未接线**（NOT_WIRED）。混成一个码，调用方会把
+    # 「内核还没开这个工具」当成「期间关了」，然后白等或白重试。
+
+    def _period_call(self, name, action, *args, **kwargs):
+        fn = getattr(self._inner, name, None)
+        if fn is None:
+            raise ApiError("NOT_WIRED",
+                           f"当前传输形态未开期间关账工具（{name}）",
+                           detail={"action": action, "method": name})
+        try:
+            out = fn(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 见 _raise_kernel_error
+            _raise_kernel_error(exc, action)
+        return _kernel_result(out, action)
+
+    def close_period(self, period, actor, note=None):
+        return self._period_call("close_period", "close_period",
+                                 period, actor, note=note)
+
+    def reopen_period(self, period, actor, reason):
+        return self._period_call("reopen_period", "reopen_period",
+                                 period, actor, reason)
+
+    def period_status(self, period):
+        return self._period_call("period_status", "period_status", period)
+
+    def period_report(self, period):
+        return self._period_call("period_report", "period_report", period)
+
+    def list_periods(self):
+        return self._period_call("list_periods", "list_periods")
 
     def __getattr__(self, name):  # 其余工具面方法透传（不改变既有行为）
         return getattr(self._inner, name)

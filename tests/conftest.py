@@ -102,7 +102,10 @@ def reset_db(db_settings):
                     # 漏掉就会让上一个用例的到货事实漏进下一个用例的库存与分录。
                     # business_events 的 TRUNCATE 由 erp.allow_maintenance 开关放行。
                     "business_events, event_revisions, objects, object_events, "
-                    "object_balances, posting_rules, posting_links, posting_gaps "
+                    "object_balances, posting_rules, posting_links, posting_gaps, "
+                    # 期间台账（add-period-close）：漏掉它，上一个用例关掉的期间会
+                    # 拦住下一个用例的第一次落账——症状是「凭空 PERIOD_CLOSED」。
+                    "accounting_periods "
                     "RESTART IDENTITY CASCADE")
     with connection(db_settings) as conn:
         seed_universal_accounts(conn, TENANT)

@@ -25,6 +25,7 @@ from fd_erp_vertical_templates.freight import FreightStatementLane
 from fd_erp_vertical_templates.inventory import InventoryLane
 from fd_erp_vertical_templates.masterdata import MasterData
 from fd_erp_vertical_templates.aging import PayableAging, ReceivableAging
+from .periods import PeriodBook
 from fd_erp_vertical_templates.assets import FixedAssetLane
 from fd_erp_vertical_templates.budget import BudgetBook
 from fd_erp_vertical_templates.invoice_receipt import InvoiceReceiptLane
@@ -93,6 +94,8 @@ class Drivers:
     receivables: ReceivableAging
     #: 应付账龄：同一个引擎的镜像绑定（开放项＝贷方），默认 `2000 应付账款`。
     payables: PayableAging
+    #: 期间关账：关/重开/查状态/复算核对（期间语义全在内核，本层只绑定）。
+    periods: PeriodBook
     wms: WmsSnapshotAdapter
     disposal: ThresholdEvaluator
     #: 内核工具面实现（形态无关）。数量面只读查询直接经它——库存余额是内核的派生
@@ -158,6 +161,7 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 应付账龄与应收共用同一份核销分桶实现（开放项＝贷方），不是镜像复制。
     payables = PayableAging(settings.tenant_id, kernel,
                             base_currency=settings.base_currency)
+    period_book = PeriodBook(kernel)
     disposal = ThresholdEvaluator(settings.tenant_id, data_dir)
     return Drivers(tenant_id=settings.tenant_id, master=master, pricing=pricing,
                    orders=orders, aftersales=aftersales, crm=crm,
@@ -166,7 +170,7 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                    inventory=inventory, policy=policy, cost=cost, assets=assets,
                    budget=budget, invoice_receipts=invoice_receipts,
                    statements=statements, receivables=receivables,
-                   payables=payables,
+                   payables=payables, periods=period_book,
                    wms=wms, disposal=disposal, kernel=kernel)
 
 
