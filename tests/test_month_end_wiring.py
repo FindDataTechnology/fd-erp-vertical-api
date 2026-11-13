@@ -1,7 +1,11 @@
 """月结清单装配（change: add-month-end-checklist 任务 2.1）。
 
 判据：真库落应收与出库成本 → 登记坏账费率 → `run` 三步准备（只出待确认）→ 有待办不关账 →
-人工过门 → 再 `run(close=True)` 关账成功 → `periods.report` 复算一致。
+人工过门 → 再 `run` 出结转损益（第四步）→ 过门 → `run(close=True)` 关账成功 →
+`periods.report` 复算一致。
+
+关账前必须多过一道门：结转的基数只认已落账分录，坏账计提没落账时结转会少一笔费用，
+所以它被推迟（`deferred`），而不是拿未落账的数据算出来。
 """
 from __future__ import annotations
 
@@ -49,11 +53,28 @@ def test_month_end_prepares_requires_confirmation_then_closes(client_faces):
     for prop in d.kernel.list_proposals(status="pending")["proposals"]:
         d.kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo")
 
+    # 费用类提案落账后，第四步结转损益才出得来（它只认已落账分录）
+    after = d.month_end.run("2026-11", close=True)
+    closing_step = {s["step"]: s for s in after["steps"]}["closing"]
+    assert closing_step["state"] == "prepared", closing_step
+    assert after["closed"] is False            # 结转提案本身还得过门
+
+    for prop in d.kernel.list_proposals(status="pending")["proposals"]:
+        d.kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo")
+
     final = d.month_end.run("2026-11", close=True)
     assert final["closed"] is True, final.get("closeError")
     assert final["blocked"] is False
     report = d.periods.report("2026-11")
     assert report["verified"] is True and report["diffs"] == []
+
+    # 关账后报表口径：利润表仍是原数（结转不进损益口径），资产负债表未结转损益归零
+    inc = d.statements.income_statement("2026-11")
+    assert inc["revenue"] == "10000.00"
+    bs = d.statements.balance_sheet("2026-11")
+    assert bs["balanced"] is True, bs.get("error")
+    assert bs["unclosedProfit"] == "0.00"
+    assert d.closing.status("2026-11")["state"] == "posted"
 
 
 def test_closed_period_is_refused(client_faces):

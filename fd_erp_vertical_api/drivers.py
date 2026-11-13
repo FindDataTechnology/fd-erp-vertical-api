@@ -27,6 +27,7 @@ from fd_erp_vertical_templates.masterdata import MasterData
 from fd_erp_vertical_templates.aging import PayableAging, ReceivableAging
 from fd_erp_vertical_templates.bad_debt import BadDebtLane
 from fd_erp_vertical_templates.consolidation import ConsolidationBook
+from fd_erp_vertical_templates.closing import PeriodClosing
 from fd_erp_vertical_templates.month_end import MonthEndChecklist
 from .periods import PeriodBook
 from fd_erp_vertical_templates.assets import FixedAssetLane
@@ -103,7 +104,9 @@ class Drivers:
     bad_debts: BadDebtLane
     #: 合并报表：按 entity 维度分主体取数 + 内部往来抵销 + 平衡断言（工作底稿）。
     consolidation: ConsolidationBook
-    #: 月结清单：结转成本 → 折旧 → 减值三步准备（只出待确认），无待办才关账。
+    #: 期末损益结转：逐科目结平 + 差额入 3100（只出待确认；分录带 close: 前缀）。
+    closing: PeriodClosing
+    #: 月结清单：结转成本 → 折旧 → 减值三步准备 + 结转损益（只出待确认），无待办才关账。
     month_end: MonthEndChecklist
     wms: WmsSnapshotAdapter
     disposal: ThresholdEvaluator
@@ -177,9 +180,13 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 合并：主体结构人工登记，取数按 entity 维度，抵销按内部往来科目对。
     consolidation = ConsolidationBook(settings.tenant_id, data_dir, kernel, policy,
                                       base_currency=settings.base_currency)
-    # 月结清单：三条车道按顺序准备，关账入口注入内核 periods 绑定（模板层不实现关账）。
+    # 期末结转：关账台账一并注入——已关期间的结转在提交前就被拒，不用等 DB 触发器。
+    closing = PeriodClosing(settings.tenant_id, kernel, periods=period_book,
+                            base_currency=settings.base_currency)
+    # 月结清单：四条车道按顺序准备，关账入口注入内核 periods 绑定（模板层不实现关账）。
     month_end = MonthEndChecklist(settings.tenant_id, kernel, cost=cost, assets=assets,
-                                  bad_debts=bad_debts, closer=period_book)
+                                  bad_debts=bad_debts, closing=closing,
+                                  closer=period_book)
     disposal = ThresholdEvaluator(settings.tenant_id, data_dir)
     return Drivers(tenant_id=settings.tenant_id, master=master, pricing=pricing,
                    orders=orders, aftersales=aftersales, crm=crm,
@@ -190,7 +197,7 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                    statements=statements, receivables=receivables,
                    payables=payables, periods=period_book,
                    bad_debts=bad_debts, consolidation=consolidation,
-                   month_end=month_end,
+                   closing=closing, month_end=month_end,
                    wms=wms, disposal=disposal, kernel=kernel)
 
 
