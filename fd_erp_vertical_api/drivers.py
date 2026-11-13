@@ -29,6 +29,7 @@ from fd_erp_vertical_templates.bad_debt import BadDebtLane
 from fd_erp_vertical_templates.consolidation import ConsolidationBook
 from fd_erp_vertical_templates.books import LedgerBooks
 from fd_erp_vertical_templates.closing import PeriodClosing
+from fd_erp_vertical_templates.comparison import ReportComparison
 from fd_erp_vertical_templates.fx_revaluation import FxRevaluation
 from fd_erp_vertical_templates.opening import OpeningBalances
 from fd_erp_vertical_templates.month_end import MonthEndChecklist
@@ -97,6 +98,8 @@ class Drivers:
     invoice_receipts: InvoiceReceiptLane
     #: 财务报表：试算平衡 / 利润表 / 资产负债表 / 按维度费用（全部从分录现算）。
     statements: StatementBook
+    #: 报表期间对比：三表逐行给本期 / 基准 / 差额 / 变动率（复用同一报表引擎）。
+    comparison: ReportComparison
     #: 应收账龄：按客户（`customer` 维度）FIFO 核销后分桶。
     receivables: ReceivableAging
     #: 应付账龄：同一个引擎的镜像绑定（开放项＝贷方），默认 `2000 应付账款`。
@@ -195,6 +198,10 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 建账期初：只在空账上录、只此一次；它定义的是「账本开始之前」的余额。
     opening = OpeningBalances(settings.tenant_id, kernel,
                               base_currency=settings.base_currency)
+    # 期间对比：直接复用上面这份 statements，本期列与报表同源（不另写取数）。
+    comparison = ReportComparison(settings.tenant_id, kernel,
+                                  statements=statements,
+                                  base_currency=settings.base_currency)
     # 账簿：与报表同源（同一批分录），所以「余额表期末 == 试算表余额」是可验的恒等式。
     books = LedgerBooks(settings.tenant_id, kernel,
                         base_currency=settings.base_currency)
@@ -215,6 +222,7 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                    statements=statements, receivables=receivables,
                    payables=payables, periods=period_book,
                    bad_debts=bad_debts, consolidation=consolidation,
+                   comparison=comparison,
                    opening=opening, fx_revaluation=fx_revaluation,
                    books=books, closing=closing,
                    month_end=month_end,
