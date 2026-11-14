@@ -1405,8 +1405,11 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth,
 
     @app.get("/erp/supply-chain/v1/fi/periods")
     async def fi_periods(ctx: dict = Depends(fi_route("finance.read"))):
-        """期间清单（含关账状态）。"""
-        return ok_shell(d.periods.list())
+        """期间清单：关账记录 ∪ **有分录的期间**（`hasEntries`/`vouchers`/`lines`）。
+
+        只列「关过账的期间」会让有业务没关账的月份整月消失——那正是要关的那一个月。
+        """
+        return ok_shell(d.periods.overview(d.books.period_activity()))
 
     @app.get("/erp/supply-chain/v1/fi/periods/{period}")
     async def fi_period(period: str,

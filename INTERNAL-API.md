@@ -53,7 +53,17 @@ ERP_FINANCE_STAFF_FILE=   # 或给文件路径；内联优先
 `X-ERP-*` 一律剥离；`x-erp-staff` 由会话邮箱/绑定表**重新注入**——所以这个头伪造不了，
 它才敢被当作授权依据。
 
-### 0.3 其它
+### 0.3 配置缺失报 400，能力缺失才报 501
+
+- **可配置项的缺失**（税率还没登记、任职名单还没配）→ `INVALID_ARGUMENT`（400），
+  消息里说清缺哪几项、去哪登记；
+- **能力确实没实现**（资产台账归属客户系统、个别认定法）→ `NOT_WIRED`（501）。
+
+不许用 501 表达配置缺失：只看状态码的监控会把它当服务降级，看文案的人会以为功能不存在，
+而这条信号一旦被污染，「501 = 我们确实没做」就不再可信。
+（2026-11-14 审计实测：附加税/所得税预演在未登记税率的租户上返回 501，已改为 400。）
+
+### 0.4 其它
 
 - **租户头 `X-ERP-Tenant` 是常量，不是凭据**，不能单独放行——只凭它开财报等于裸奔。
 - 页集 `supply-chain.fi` 是**内部页集**（`pagesets.INTERNAL_PAGESET_KEYS`）：
@@ -146,7 +156,7 @@ ERP_FINANCE_STAFF_FILE=   # 或给文件路径；内联优先
 
 | 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
 |---|---|---|---|---|
-| GET | `/erp/supply-chain/v1/fi/periods` | — | 期间清单（含关账状态） | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/periods` | — | 期间清单＝关账记录 ∪ **有分录的期间**：逐行 `closed`/`actor`/`hasEntries`/`vouchers`/`lines`/`lastBookedOn` | `finance.read` |
 | GET | `/erp/supply-chain/v1/fi/periods/{period}` | — | 单期间状态：是否关账、关账人/时间/备注 | `finance.read` |
 | GET | `/erp/supply-chain/v1/fi/periods/{period}/report` | — | 关账快照复算（封账那刻的数 vs 现在重算） | `finance.read` |
 | POST | `/erp/supply-chain/v1/fi/periods/{period}/close` | JSON 可选：`note` | 关账结果；`actor` 取 `X-ERP-Staff` | **`finance.confirm`** |

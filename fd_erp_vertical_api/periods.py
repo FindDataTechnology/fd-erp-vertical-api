@@ -22,6 +22,24 @@ class _PeriodKernel(Protocol):
     def list_periods(self) -> Any: ...
 
 
+def _rows(payload: Any) -> list[dict[str, Any]]:
+    """把内核期间清单归一成 list。
+
+    **两种传输形态的返回形状不同**：`inprocess` 直接回 list，`mcp` 回
+    `{"ok": true, "data": [...], "rows_returned": N}`。不归一的话，同一个端点在
+    测试环境返回数组、在生产返回嵌套对象——而两边都「有数据」，谁也看不出错。
+    （同族于 cost 车道的 `items`/`events`/`data` 键名教训。）
+    """
+    if isinstance(payload, list):
+        return [r for r in payload if isinstance(r, dict)]
+    if isinstance(payload, dict):
+        for key in ("data", "items", "rows", "periods"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [r for r in value if isinstance(r, dict)]
+    return []
+
+
 class PeriodBook:
     """关账驱动：关账 / 重开 / 查状态 / 复算核对 / 期间清单。"""
 
@@ -40,8 +58,35 @@ class PeriodBook:
     def report(self, period: str) -> Any:
         return self._kernel.period_report(period)
 
-    def list(self) -> Any:
-        return self._kernel.list_periods()
+    def list(self) -> list[dict[str, Any]]:
+        """期间清单（关账记录），形状已归一（见 `_rows`）。"""
+        return _rows(self._kernel.list_periods())
+
+    def overview(self, activity: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """期间清单 = 关账记录 ∪ 有分录的期间（change: fix-fi-surface-audit）。
+
+        内核 `list_periods` 只是「关过或重开过的期间」；只拿它当清单，**有业务但没关账的
+        月份会整月消失**——财务要选「这个月来关账」时看到空列表，分不清是「没业务」还是
+        「没关过」。所以这里并上账簿按期间的凭证汇总，逐行给 `hasEntries`。
+        """
+        by_period: dict[str, dict[str, Any]] = {}
+        for row in self.list():
+            period = str(row.get("period") or "").strip()
+            if not period:
+                continue
+            by_period[period] = {**row, "hasEntries": False,
+                                 "vouchers": 0, "lines": 0, "lastBookedOn": None}
+        for act in activity:
+            period = str(act.get("period") or "").strip()
+            if not period:
+                continue
+            row = by_period.setdefault(period, {
+                "period": period, "closed": False, "actor": None, "decidedAt": None})
+            row.update({"hasEntries": bool(act.get("hasEntries")),
+                        "vouchers": int(act.get("vouchers") or 0),
+                        "lines": int(act.get("lines") or 0),
+                        "lastBookedOn": act.get("lastBookedOn")})
+        return [by_period[p] for p in sorted(by_period)]
 
 
 __all__ = ["PeriodBook"]
