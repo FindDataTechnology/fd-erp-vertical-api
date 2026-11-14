@@ -168,6 +168,7 @@ FINANCE_GRANT_TIERS: tuple[str, ...] = (
 PROGRAM_IDENTITIES: frozenset[str] = frozenset({
     "system", "agent",
     "asset-engine", "billing-engine", "posting-engine", "bad-debt-engine",
+    "cost-engine",
 })
 
 #: 配置里可用的短键（`{"read": [...]}`）到全名的映射。

@@ -259,3 +259,30 @@ detail 里指明应费用化。`amount: null` 是**显式取消**门槛——`am
 
 **逐行 `balance` 是按科目走的**：各科目相加恒为零（每笔分录借贷必平），那种「余额」看着一路
 归零、对查账无用。看往来余额请看 `subtotals` 里应收/应付那一行。
+
+## 1j. 成本层与期末结转（月结清单第一步的料）
+
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
+|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/cost/replay` | — | `method`/`provisionalBasis` + `closing`（结存，含 `basis=unknown`）+ `issues`（每笔出库成本，未知为 `null`）+ `gaps`（成本未知事实清单）+ `pools`（逐层） | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/cost/issue-price` | `sku`、`qty`（必填）；`warehouse`、`lot`（可选） | `unitCost`/`amount`/`layers`（消耗了哪几层）；取不到成本即拒 | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/reports/cogs-preview` | `period` | 预演：`total`/`issues`/`skipped` + `proposed=false`、`preview=true`、`blockers`、`canSubmit` | `finance.read` |
+| POST | `/erp/supply-chain/v1/fi/cost/cogs/{period}` | — | 待确认提案（借 `5000` / 贷 `1200`）+ `proposed=true` + `stableId` | `finance.write` |
+| POST | `/erp/supply-chain/v1/fi/cost/standard` | JSON：`sku`、`unitCost`、`currency` | 登记结果；`approvedBy` 取 `X-ERP-Staff`，**引擎身份一律拒** | `finance.write` |
+
+**输入从哪来**：`POST /sp/arrival-notices` 每行带 `cost` 落 `goods_received`，
+提货出库落 `goods_issued`——成本引擎重放的就是这两类 accepted 事件。
+
+**两条「宁可拒也不猜」是这节的重点**：
+- 出库计价取不到成本 **拒**（不返回 0）——一次算成 0 的出库成本会永久抬高毛利；
+- 本期有成本未知的出库 **整期拒结转**（不跳过）——部分结转会让营业成本偏小、毛利虚高，
+  而报表上「看起来合理」。
+
+**不开放 `partial`**：车道里有这个逃生阀给直连调用，REST 面不给——「自报其名」救不了
+「报表已经按虚高的毛利出了」这个事实。
+
+**预演不抛错**：上面四条（成本未知 / 无已计价 / 金额变化属跨期调整 / 已按同额结转过）
+都进 `blockers`。月末想知道「这期成本多少」是最常见的问法。
+
+**同一期间金额变了就拒**：期间结账后新增出库属跨期调整，先作废/冲正上期结转再重结，
+不允许静默改大改小。

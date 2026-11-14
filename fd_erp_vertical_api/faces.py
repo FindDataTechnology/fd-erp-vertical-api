@@ -2031,3 +2031,59 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth,
         return ok_shell(d.books.party_statement(
             params.get("dimension"), params.get("value"), _period(request),
             accounts=accounts or None))
+
+    # ---- 成本层与期末结转（月结清单第一步的料）----
+
+    @app.get("/erp/supply-chain/v1/fi/cost/replay")
+    async def fi_cost_replay(ctx: dict = Depends(fi_route("finance.read"))):
+        """成本层重放：方法/暂估口径 + 结存 + 每笔出库成本 + 缺口 + 逐层明细。
+
+        缺口（`gaps`）是重点：它是「成本未知」的事实清单，不是错误——有缺口时
+        结存会标 `basis=unknown`，而出库成本会是 `null` 而不是 0。
+        """
+        return ok_shell(d.cost.replay())
+
+    @app.get("/erp/supply-chain/v1/fi/cost/issue-price")
+    async def fi_cost_issue_price(request: Request,
+                                  ctx: dict = Depends(fi_route("finance.read"))):
+        """这一次出库按当前口径值多少（只读，不记账）。
+
+        取不到成本就拒——**不返回 0**：一次被算成 0 的出库成本会永久抬高毛利，
+        而报表上看不出来。
+        """
+        p = request.query_params
+        return ok_shell(d.cost.issue_cost(
+            p.get("sku"), p.get("qty"), warehouse=p.get("warehouse"),
+            lot=p.get("lot")))
+
+    @app.get("/erp/supply-chain/v1/fi/reports/cogs-preview")
+    async def fi_cogs_preview(request: Request,
+                              ctx: dict = Depends(fi_route("finance.read"))):
+        """结转预演：只算不写。真结转会被什么挡住（成本未知/无已计价/金额变化/已结转过）
+        以 `blockers` 报出，而不是抛错。"""
+        return ok_shell(d.cost.post_cogs(_period(request), preview=True))
+
+    @app.post("/erp/supply-chain/v1/fi/cost/cogs/{period}")
+    async def fi_post_cogs(period: str,
+                           ctx: dict = Depends(fi_route("finance.write"))):
+        """提交本期出库成本结转（只出提案：借 5000 / 贷 1200）。
+
+        不开放 `partial`：只结已计价的会让营业成本偏小、毛利虚高，而报表上「看起来合理」。
+        要结转就先把成本补齐。
+        """
+        return ok_shell(d.cost.post_cogs(period, submitted_by=ctx["staff"]))
+
+    @app.post("/erp/supply-chain/v1/fi/cost/standard")
+    async def fi_set_standard_cost(request: Request,
+                                   ctx: dict = Depends(fi_route("finance.write"))):
+        """登记标准成本（人工 only）。标准成本是会计估计，程序不得自设。"""
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        unknown = sorted(set(body) - {"sku", "unitCost", "currency"})
+        if unknown:
+            raise ApiError("INVALID_ARGUMENT", f"未知字段：{'、'.join(unknown)}",
+                           detail={"allowed": ["sku", "unitCost", "currency"]})
+        return ok_shell(d.cost.set_standard_cost(
+            body.get("sku"), body.get("unitCost"),
+            currency=body.get("currency"), approved_by=ctx["staff"]))
