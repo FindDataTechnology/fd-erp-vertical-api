@@ -1377,6 +1377,83 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth) -> None:
         """现金流量表（直接法；本期 + 上年同期 + 本年累计，含两条自证脚注）。"""
         return ok_shell(d.cn_statements.cash_flow(_period(request)))
 
+    # ---- 发票台账（录入与查询；抵扣判断在台账里，这一层只投影）----
+
+    @app.get("/erp/supply-chain/v1/fi/invoices")
+    async def fi_invoices(request: Request,
+                          ctx: dict = Depends(fi_route("finance.read"))):
+        """列出票据；`direction` 可收窄到 sale / purchase。"""
+        direction = request.query_params.get("direction")
+        return ok_shell(d.cn_invoices.invoices(direction=direction))
+
+    @app.get("/erp/supply-chain/v1/fi/invoices/deduction")
+    async def fi_invoice_deduction(request: Request,
+                                   ctx: dict = Depends(fi_route("finance.read"))):
+        """本期进项三档：可抵 / 待认证 / 不可抵（税额合计 + 逐票）。"""
+        return ok_shell(d.cn_invoices.deduction(_period(request)))
+
+    @app.get("/erp/supply-chain/v1/fi/invoices/reconciliation")
+    async def fi_invoice_reconciliation(request: Request,
+                                        ctx: dict = Depends(fi_route("finance.read"))):
+        """账上 2221.01.02 借方发生额 vs 台账可抵税额。
+
+        差额通常是手工直接记进项科目的金额——它不在台账里，无法证明可抵。
+        """
+        return ok_shell(d.cn_invoices.reconcile(_period(request)))
+
+    @app.get("/erp/supply-chain/v1/fi/reports/invoice-summary")
+    async def fi_invoice_summary(request: Request,
+                                 ctx: dict = Depends(fi_route("finance.read"))):
+        """台账口径的期间汇总。"""
+        return ok_shell(d.cn_invoices.filing_summary(_period(request)))
+
+    @app.get("/erp/supply-chain/v1/fi/invoices/{number}")
+    async def fi_invoice(request: Request, number: str,
+                         ctx: dict = Depends(fi_route("finance.read"))):
+        row = d.cn_invoices.invoice(number)
+        if row is None:
+            raise ApiError("NOT_FOUND", "发票不存在", detail={"number": number})
+        return ok_shell(row)
+
+    @app.post("/erp/supply-chain/v1/fi/invoices")
+    async def fi_register_invoice(request: Request,
+                                  ctx: dict = Depends(fi_route("finance.write"))):
+        """登记一张发票。
+
+        票种与税额由台账校验：票种是封闭集，`tax` 与「金额 × 税率」不符即拒——
+        票面与台账不符是最难查的错误，宁可拒也不记账。
+        """
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        unknown = sorted(set(body) - {"direction", "kind", "number", "net", "rate",
+                                      "tax", "counterparty", "issuedOn"})
+        if unknown:
+            # 不把请求体原样透传：驼峰键与台账的 snake_case 形参一撞就是 500，
+            # 而 500 会把「字段名写错」伪装成「服务坏了」。名单之外一律点名拒绝。
+            raise ApiError("INVALID_ARGUMENT", f"未知字段：{'、'.join(unknown)}",
+                           detail={"allowed": ["direction", "kind", "number", "net",
+                                               "rate", "tax", "counterparty",
+                                               "issuedOn"]})
+        return ok_shell(d.cn_invoices.register(
+            body.get("direction"), body.get("kind"), body.get("number"),
+            body.get("net"), rate=body.get("rate", "13"), tax=body.get("tax"),
+            counterparty=body.get("counterparty"),
+            issued_on=body.get("issuedOn"), submitted_by=ctx["staff"]))
+
+    @app.post("/erp/supply-chain/v1/fi/invoices/{number}/certify")
+    async def fi_certify_invoice(request: Request, number: str,
+                                 ctx: dict = Depends(fi_route("finance.write"))):
+        """记录勾选认证（人工事实）。
+
+        经办人取财务身份头，**不许 system/agent**：认证是人工事实，系统不得自证抵扣。
+        """
+        body = await request.json() if await request.body() else {}
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        return ok_shell(d.cn_invoices.certify(
+            number, certified_on=body.get("certifiedOn"), by=ctx["staff"]))
+
     @app.get("/erp/supply-chain/v1/fi/reports/surcharges")
     async def fi_surcharges(request: Request,
                             ctx: dict = Depends(fi_route("finance.read"))):

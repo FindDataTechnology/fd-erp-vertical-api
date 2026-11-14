@@ -54,3 +54,23 @@
 
 **预演不写账**：两个预演端点的返回体 `proposed=false`，且内核待确认提案集合调用前后不变。
 「看一眼要缴多少」不得在账上留提案——谁点的、点两次是否重复，事后都说不清。
+
+## 1c. 发票台账（录入与查询）
+
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
+|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/invoices` | `direction`（可选 sale/purchase） | 票据列表（含 `tier`、认证状态、`redOf`） | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/invoices/{number}` | — | 单票详情；不存在 → `NOT_FOUND` | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/invoices/deduction` | `period` | 进项三档（可抵 / 待认证 / 不可抵，税额合计 + 逐票） | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/invoices/reconciliation` | `period` | 账上 `2221.01.02` 借方发生额 vs 台账可抵税额，差额与提示 | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/reports/invoice-summary` | `period` | 台账口径的期间汇总 | `finance.read` |
+| POST | `/erp/supply-chain/v1/fi/invoices` | JSON：`direction`、`kind`、`number`、`net`、`rate`/`tax`、`issuedOn` | 登记结果；票种不在封闭集或税额与「金额 × 税率」不符即拒 | `finance.write` |
+| POST | `/erp/supply-chain/v1/fi/invoices/{number}/certify` | JSON 可选：`certifiedOn` | 认证结果；经办人取财务身份头，**system/agent 一律拒** | `finance.write` |
+
+**抵扣判断不在这一层**：某张票属于可抵 / 待认证 / 不可抵由台账决定（票种 + 认证共同决定）。
+端点只做投影与录入——在这一层再写一遍判断就是第二份口径。
+
+**认证必须人工经办**：`by` 取自 `X-ERP-Staff`，`system`/`agent`/空一律拒。系统不得自证抵扣。
+
+**不做的**：过账（`purchase`/`post_red` 会提提案）与红字票登记属于确认门那一侧，
+与提案收件箱一起做——现在开一个只能提不能确认的入口只会积压。
