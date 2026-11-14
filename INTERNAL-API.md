@@ -97,3 +97,24 @@
 **退回必须带理由**：不带理由的退回等于没退回，提出方不知道要改什么。
 
 **为什么不做批量确认**：一次确认几十条会让「逐笔看过」这句话失去意义，而确认是唯一入口。
+
+## 1e. 月结三件（期间 / 期初 / 结转）
+
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
+|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/periods` | — | 期间清单（含关账状态） | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/periods/{period}` | — | 单期间状态：是否关账、关账人/时间/备注 | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/periods/{period}/report` | — | 关账快照复算（封账那刻的数 vs 现在重算） | `finance.read` |
+| POST | `/erp/supply-chain/v1/fi/periods/{period}/close` | JSON 可选：`note` | 关账结果；`actor` 取 `X-ERP-Staff` | **`finance.confirm`** |
+| POST | `/erp/supply-chain/v1/fi/periods/{period}/reopen` | JSON：`reason`（**必填**） | 重开结果 | **`finance.confirm`** |
+| GET | `/erp/supply-chain/v1/fi/opening` | — | 建账期初的 `status` + `preview` | `finance.read` |
+| POST | `/erp/supply-chain/v1/fi/opening` | JSON：`lines`、`asOf`、`allowWithEntries`、`reason` | 待确认提案；只在空账可录 | `finance.write` |
+| GET | `/erp/supply-chain/v1/fi/reports/closing-preview` | `period` | 结哪些科目、净额、搬进权益多少（不写账） | `finance.read` |
+| POST | `/erp/supply-chain/v1/fi/closing/{period}/transfer` | — | 待确认提案；已关账期间拒绝穿入 | `finance.write` |
+
+**关账/重开用 `finance.confirm` 而不是 write**：关账会挡住该期间后续落账、重开会放开已封的期间，
+这是时间轴上的动作，与「登记一张票」不是同一类。顺序关账、只重开最近一期、快照复算
+全部在内核判定，端点只转发——在这一层重写一遍就是第二份口径。
+
+**期初只在空账上可录**（车道强制）：事后插入会改写全部历史报表；确需补录必须
+`allowWithEntries` + `reason`，受权偏离要留痕。

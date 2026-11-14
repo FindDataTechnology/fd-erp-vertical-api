@@ -1377,6 +1377,91 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth) -> None:
         """现金流量表（直接法；本期 + 上年同期 + 本年累计，含两条自证脚注）。"""
         return ok_shell(d.cn_statements.cash_flow(_period(request)))
 
+    # ---- 月结三件：期间 / 期初 / 结转 ----
+
+    @app.get("/erp/supply-chain/v1/fi/periods")
+    async def fi_periods(ctx: dict = Depends(fi_route("finance.read"))):
+        """期间清单（含关账状态）。"""
+        return ok_shell(d.periods.list())
+
+    @app.get("/erp/supply-chain/v1/fi/periods/{period}")
+    async def fi_period(period: str,
+                        ctx: dict = Depends(fi_route("finance.read"))):
+        """单期间状态：是否关账、关账人/时间/备注。"""
+        return ok_shell(d.periods.status(period))
+
+    @app.get("/erp/supply-chain/v1/fi/opening")
+    async def fi_opening(ctx: dict = Depends(fi_route("finance.read"))):
+        """建账期初：状态 + 预演（还不知道要录什么时先看它）。"""
+        return ok_shell({"status": d.opening.status(), "preview": d.opening.preview()})
+
+    @app.post("/erp/supply-chain/v1/fi/opening")
+    async def fi_register_opening(request: Request,
+                                  ctx: dict = Depends(fi_route("finance.write"))):
+        """登记期初余额单（只出待确认提案）。
+
+        只在空账上可录：车道强制，事后插入会改写全部历史报表；确需在有分录入账时补录，
+        必须显式 `allowWithEntries` + 理由（受权偏离要留痕）。
+        """
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        unknown = sorted(set(body) - {"lines", "asOf", "allowWithEntries", "reason"})
+        if unknown:
+            raise ApiError("INVALID_ARGUMENT", f"未知字段：{'、'.join(unknown)}",
+                           detail={"allowed": ["lines", "asOf", "allowWithEntries",
+                                               "reason"]})
+        return ok_shell(d.opening.register(
+            body.get("lines") or [], as_of=body.get("asOf"),
+            allow_with_entries=bool(body.get("allowWithEntries")),
+            reason=body.get("reason"), submitted_by=ctx["staff"]))
+
+    @app.get("/erp/supply-chain/v1/fi/reports/closing-preview")
+    async def fi_closing_preview(request: Request,
+                                 ctx: dict = Depends(fi_route("finance.read"))):
+        """期末结转预演：结哪些科目、净额多少、搬进权益多少（不写账）。"""
+        return ok_shell(d.closing.preview(_period(request)))
+
+    @app.post("/erp/supply-chain/v1/fi/closing/{period}/transfer")
+    async def fi_closing_transfer(period: str,
+                                  ctx: dict = Depends(fi_route("finance.write"))):
+        """提交结转提案（不代确认）：同期间幂等，已关账期间拒绝穿入。"""
+        return ok_shell(d.closing.transfer(period, submitted_by=ctx["staff"]))
+
+    @app.post("/erp/supply-chain/v1/fi/periods/{period}/close")
+    async def fi_close_period(period: str, request: Request,
+                              ctx: dict = Depends(fi_route("finance.confirm"))):
+        """关账：挡住该期间后续落账。
+
+        权限用 `finance.confirm` 而不是 write——关账是时间轴上的不可逆动作，
+        与「登记一张票」不是同一类事。顺序关账由内核判，这里只转发。
+        """
+        who = _human(ctx["staff"])
+        body = await request.json() if await request.body() else {}
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        return ok_shell(d.periods.close(period, actor=who, note=body.get("note")))
+
+    @app.post("/erp/supply-chain/v1/fi/periods/{period}/reopen")
+    async def fi_reopen_period(period: str, request: Request,
+                               ctx: dict = Depends(fi_route("finance.confirm"))):
+        """重开已关期间。`reason` 必填——放开一个已封的期间必须留下为什么。"""
+        who = _human(ctx["staff"])
+        body = await request.json() if await request.body() else {}
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        reason = str(body.get("reason") or "").strip()
+        if not reason:
+            raise ApiError("INVALID_ARGUMENT", "重开必须带理由（reason）",
+                           detail={"required": "reason"})
+        return ok_shell(d.periods.reopen(period, actor=who, reason=reason))
+
+    @app.get("/erp/supply-chain/v1/fi/periods/{period}/report")
+    async def fi_period_report(period: str,
+                               ctx: dict = Depends(fi_route("finance.read"))):
+        """关账快照复算：这一期封账那一刻的数与现在重算的数。"""
+        return ok_shell(d.periods.report(period))
+
     # ---- 提案收件箱与拍板（确认门缺的那一侧）----
 
     def _human(role: str) -> str:
