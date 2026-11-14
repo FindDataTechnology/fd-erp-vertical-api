@@ -1962,3 +1962,32 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth,
         """账面净值；`asOf`（YYYY-MM 或 YYYY-MM-DD）可回看某一期末。"""
         as_of = (request.query_params.get("asOf") or "").strip() or None
         return ok_shell(d.assets.book_value(asset_id, as_of=as_of))
+
+    # ---- 月结清单（一串有顺序的动作，不是 48 个按钮）----
+
+    @app.get("/erp/supply-chain/v1/fi/month-end/{period}")
+    async def fi_month_end(period: str,
+                           ctx: dict = Depends(fi_route("finance.read"))):
+        """月结清单：逐项判据 + 期间内待确认提案 + 下一步该由谁做（只读）。"""
+        return ok_shell(d.month_end.checklist(period))
+
+    @app.post("/erp/supply-chain/v1/fi/month-end/{period}/run")
+    async def fi_month_end_run(period: str,
+                               ctx: dict = Depends(fi_route("finance.write"))):
+        """按顺序准备（结转成本 → 折旧 → 减值 → 结转损益），只出待确认提案。
+
+        **不代任何人过门**，也不带 `partial` 逃生阀：成本未知时整期拒是设计——
+        结转一个偏小的营业成本会让毛利虚高，而报表上看不出来。
+        """
+        return ok_shell(d.month_end.run(period, actor=ctx["staff"]))
+
+    @app.post("/erp/supply-chain/v1/fi/month-end/{period}/close")
+    async def fi_month_end_close(period: str,
+                                 ctx: dict = Depends(fi_route("finance.confirm"))):
+        """准备并关账（`finance.confirm`）：关账是时间轴上的不可逆动作。
+
+        前置没满足就关不上：各步必须都成功，且期间内**没有任何待确认提案**——
+        有待办时关账会让「还没人看过的一笔分录」变成既成事实。
+        """
+        who = _human(ctx["staff"])
+        return ok_shell(d.month_end.run(period, actor=who, close=True))
