@@ -25,6 +25,15 @@ def _env(name: str, default: str | None = None) -> str | None:
     return value if value not in ("", None) else default
 
 
+def _int_env(name: str, default: int) -> int:
+    """整数环境变量：非法值退回默认（配置错误不得让服务起不来）。"""
+    raw = _env(name)
+    try:
+        return max(1, int(raw)) if raw is not None else default
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True)
 class Settings:
     """一个服务进程 = 恰好一个租户（内核 tenancy 语义对齐）。
@@ -41,6 +50,9 @@ class Settings:
     pageset_auth_json: str | None = field(default=None, repr=False)
     pageset_auth_file: str | None = field(default=None, repr=False)
     wms_snapshot_file: str | None = None
+    #: 信用占用失效时点上限（天），与内核同口径（change: close-orphan-credit-reservations）。
+    #: 内核缺该字段时自己回退到同一默认值；这里显式声明是为了让部署侧可配。
+    credit_reservation_max_days: int = 90
     extra: dict = field(default_factory=dict)
 
     @classmethod
@@ -56,6 +68,7 @@ class Settings:
             pageset_auth_json=_env("ERP_PAGESET_AUTH"),
             pageset_auth_file=_env("ERP_PAGESET_AUTH_FILE"),
             wms_snapshot_file=_env("ERP_WMS_SNAPSHOT_FILE"),
+            credit_reservation_max_days=_int_env("ERP_CREDIT_RESERVATION_MAX_DAYS", 90),
         )
 
     def data_path(self) -> Path:
