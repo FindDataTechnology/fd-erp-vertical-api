@@ -87,6 +87,7 @@ ERP_FINANCE_STAFF_FILE=   # 或给文件路径；内联优先
 | GET | `/erp/supply-chain/v1/fi/reports/income-statement` | `period` | `lines` + `totals`（本期）+ `priorYear`（同月去年，回显 `period`）+ `cumulative`（本年 1 月 1 日起） | `finance.read` | period, lines, totals, priorYear, cumulative, complete, unmapped |
 | GET | `/erp/supply-chain/v1/fi/reports/cash-flow` | `period` | 直接法三类 + `netIncrease` + 期初期末现金 + 自证 `sumCheck`/`balanceCheck` + `priorYear` + `cumulative` | `finance.read` | period, categories, netIncrease, openingCash, closingCash, sumCheck, balanceCheck, consistent, priorYear, cumulative |
 | GET | `/erp/supply-chain/v1/fi/reports/vat-return` | `period` | `ledger`（账面口径）与 `declared`（申报口径）；未提供申报数时明说「不能当作已核对」 | `finance.read` | period, ledger, declared, declaredSource, provided, consistent, reconciliation, warning |
+| GET | `/erp/supply-chain/v1/fi/reports/cash-flow-indirect` | `period` | 补充资料（间接法）：净利润 → 加回非现金（减值/折旧/汇兑）→ 营运资本变动 → 经营活动净额；`directOperating` 与**本准则**直接法互证，对不上报 `difference` 与 `unclassified`，不调平 | `finance.read` | period, netProfit, adjustments, adjustmentsTotal, workingCapital, workingCapitalTotal, indirectOperating, directOperating, difference, consistent, unclassified, note, error |
 
 ## 2. 报表自带的判据（本层不重算）
 
@@ -312,3 +313,33 @@ detail 里指明应费用化。`amount: null` 是**显式取消**门槛——`am
 
 **同一期间金额变了就拒**：期间结账后新增出库属跨期调整，先作废/冲正上期结转再重结，
 不允许静默改大改小。
+
+## 1k. 外币与期末调汇（change: add-fi-indirect-and-fx-endpoints）
+
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 响应字段 |
+|---|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/fx/rates` | `period`、`kind`（`closing` 期末 / `average` 期间平均，缺省期末） | 生效汇率（最后一次修订为准）+ 修订次数；**缺失的币种不冒充** | `finance.read` | period, kind, rates, revisions |
+| POST | `/erp/supply-chain/v1/fi/fx/rates` | JSON：`period`、`rates`（`{币种: 汇率}`）、`source`（**必填**）、`kind`（可选） | 登记结果；无出处即拒、本位币不得登记、重新登记为追加式修订 | `finance.write` | — |
+| GET | `/erp/supply-chain/v1/fi/reports/fx-revaluation-preview` | `period` | 逐币种逐科目：外币净额 / 账上本位币 / 期末汇率 / 重估后 / 差额；只含**货币性项目** | `finance.read` | period, rows, adjustments, rates, missingRates, totalDifference, status, note |
+| POST | `/erp/supply-chain/v1/fi/fx/revaluation/{period}` | — | 待确认提案（科目 ↔ `6603` 成对、借贷必平）+ `stableId`；**不落账** | `finance.write` | — |
+| GET | `/erp/supply-chain/v1/fi/fx/status/{period}` | — | `not_revalued`/`pending`/`posted`/`rejected` + 尝试次数 + 是否已登记汇率 | `finance.read` | period, state, attempts, ratesRegistered |
+
+**为什么不只是「多六条路由」**：这两条能力（补充资料、期末调汇）在模板层早已交付、
+覆盖矩阵也标 `delivered`，而 REST 面**一个入口都没有**——`FxRevaluation` 六个方法、
+`cash_flow_indirect` 全程零引用。「引擎写了」与「客户能调到」之间那道缝没有任何东西会红，
+所以这一节的真正意义是把「已交付」接上「能调到」。
+
+**汇率是外部事实，人工登记**：`source` 必填（无出处无法复核），程序身份（`system`/`agent`/
+`fx-engine`/`fx-revaluation`）一律拒——与坏账费率、资本化门槛同一条纪律。
+
+**只调货币性项目**：现金 / 应收 / 在途结算款 / 应付 / 预收暂收。存货、固定资产、累计折旧、
+坏账准备按历史成本或估计计量，不因汇率变动重述；把它们一起调，是把准则里的分类当参数了。
+
+**缺汇率就拒，绝不回落历史汇率**：历史汇率调汇等于没调。`detail.missing` 点名币种、
+`detail.fix` 指向登记入口。
+
+**已关账期间在提交前就拒**：提案不会撞期间闸（那只在**落账**时触发），不预判就会留下一张
+永远确认不了的草案，而「本期已有待确认提案」又挡住重试——同族的期末结转早就是提交前拒的。
+
+**补充资料按准则口径出**：净利润取本准则利润表（`totals.netProfit`），经营净额比对**本准则**
+直接法。用通用引擎那版会让同一个面上出现两个「经营活动净额」，而两边各自的脚注都自洽。

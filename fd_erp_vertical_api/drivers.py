@@ -228,8 +228,11 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
                             aging=receivables)
     # 期末调汇：期末汇率人工登记（外部事实），本层只做算术并出待确认提案。
     # 先于合并构造：折算与调汇共用同一张汇率登记表（同来源、同出处要求）。
+    # 期间台账一并注入：已关期间的调汇在提交前就被拒（与 `PeriodClosing` 同一口径，
+    # 不靠落账时的 DB 触发器——那会让提案在收件箱里挂着一张永远确认不了的草案）。
     fx_revaluation = FxRevaluation(settings.tenant_id, data_dir, kernel,
-                                   base_currency=settings.base_currency)
+                                   base_currency=settings.base_currency,
+                                   periods=period_book)
     # 合并：主体结构人工登记，取数按 entity 维度，抵销按内部往来科目对；
     # 外币主体先按口径折算再抵销（fx 注入即同一张汇率表）。
     consolidation = ConsolidationBook(settings.tenant_id, data_dir, kernel, policy,

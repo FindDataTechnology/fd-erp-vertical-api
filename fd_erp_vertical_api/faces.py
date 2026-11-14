@@ -2117,3 +2117,68 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth,
         return ok_shell(d.cost.set_standard_cost(
             body.get("sku"), body.get("unitCost"),
             currency=body.get("currency"), approved_by=ctx["staff"]))
+
+    # ---- 补充资料（间接法）与外币期末调汇 ----
+    # change: add-fi-indirect-and-fx-endpoints。
+    # 两条能力在模板层都已经交付（`cn_statements.cash_flow_indirect`、
+    # `FxRevaluation` 六个方法），但此前 REST 面**一个入口都没有**——覆盖矩阵标
+    # `delivered`、对外也宣称「期末调汇已交付」，客户却调不到。这类缝没有任何东西会红，
+    # 所以这一节的意义不只是「多七条路由」，是把「已交付」与「能调到」接上。
+
+    @app.get("/erp/supply-chain/v1/fi/reports/cash-flow-indirect")
+    async def fi_cash_flow_indirect(request: Request,
+                                    ctx: dict = Depends(fi_route("finance.read"))):
+        """补充资料（间接法）：净利润 → 加回非现金 → 营运资本变动 → 经营净额。
+
+        与 `/fi/reports/cash-flow` 的**本准则**直接法互证；对不上就报差额，不调平。
+        """
+        return ok_shell(d.cn_statements.cash_flow_indirect(_period(request)))
+
+    @app.get("/erp/supply-chain/v1/fi/fx/rates")
+    async def fi_fx_rates(request: Request,
+                          ctx: dict = Depends(fi_route("finance.read"))):
+        """该期间生效的汇率（`kind`：`closing` 期末 / `average` 期间平均）。"""
+        kind = (request.query_params.get("kind") or "").strip() or "closing"
+        return ok_shell(d.fx_revaluation.rates(_period(request), kind=kind))
+
+    @app.post("/erp/supply-chain/v1/fi/fx/rates")
+    async def fi_register_fx_rates(request: Request,
+                                   ctx: dict = Depends(fi_route("finance.write"))):
+        """登记某期间的汇率（**人工 only**，`source` 必填）。
+
+        汇率是**外部事实**：无出处就无法复核，所以 `source` 是必填项而不是可选备注；
+        程序身份由这里拒掉——与坏账费率、资本化门槛同一条纪律（外部事实不得由系统自证）。
+        """
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        unknown = sorted(set(body) - {"period", "rates", "source", "kind"})
+        if unknown:
+            raise ApiError("INVALID_ARGUMENT", f"未知字段：{'、'.join(unknown)}",
+                           detail={"allowed": ["period", "rates", "source", "kind"]})
+        return ok_shell(d.fx_revaluation.register_rates(
+            body.get("period"), body.get("rates") or {},
+            source=body.get("source"), kind=body.get("kind") or "closing",
+            registered_by=_human(ctx["staff"])))
+
+    @app.get("/erp/supply-chain/v1/fi/fx/status/{period}")
+    async def fi_fx_status(period: str,
+                           ctx: dict = Depends(fi_route("finance.read"))):
+        """本期调汇状态（`not_revalued`/`pending`/`posted`/`rejected`）。
+
+        状态只看提案；**是否还需调汇看 preflight 的差额**——汇率被修订时，状态会把它盖住。
+        """
+        return ok_shell(d.fx_revaluation.status(period))
+
+    @app.get("/erp/supply-chain/v1/fi/reports/fx-revaluation-preview")
+    async def fi_fx_preview(request: Request,
+                            ctx: dict = Depends(fi_route("finance.read"))):
+        """调汇预演：只算不写（逐币种逐科目：外币净额 / 账上本位币 / 重估后 / 差额）。"""
+        return ok_shell(d.fx_revaluation.preview(_period(request)))
+
+    @app.post("/erp/supply-chain/v1/fi/fx/revaluation/{period}")
+    async def fi_fx_revalue(period: str,
+                            ctx: dict = Depends(fi_route("finance.write"))):
+        """出调汇提案（科目 ↔ `6603`，借贷必平）。**不直接落账**：过确认门才成为事实。"""
+        return ok_shell(d.fx_revaluation.revalue(period,
+                                                 submitted_by=_human(ctx["staff"])))

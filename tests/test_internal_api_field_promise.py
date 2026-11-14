@@ -45,7 +45,7 @@ DOC = Path(__file__).resolve().parents[1] / "INTERNAL-API.md"
 MIN_FIELDS_PER_ROW = 2
 # 总承诺字段数的显式下限。只有端点被删除时才允许下调，否则「把闸修绿」的最省力办法
 # 就是删承诺。上调不需要理由：新端点本来就该多承诺几个字段。
-MIN_TOTAL_FIELDS = 320
+MIN_TOTAL_FIELDS = 340
 
 # 条件字段：**只在这条端点的特定状态下出现**的顶层键。它们不因不在场而失败，
 # 但必须①已登记理由；②是该端点**声明字段的子集**（防拼错，防这张表腐烂成「什么都行」）。
@@ -62,6 +62,14 @@ MAY_BE_ABSENT: dict[tuple[str, str], str] = {
         "只有关账记录才带快照",
     (f"{BASE}/books/balances", "unclassified"):
         "账上有落不进任何报表项目的科目时才出现（表外科目点名），正常账没有",
+    (f"{BASE}/reports/cash-flow-indirect", "unclassified"):
+        "直接法有落不进现金流归位表的科目时才出现",
+    (f"{BASE}/reports/cash-flow-indirect", "note"):
+        "有未归位科目或缺汇率提示时才出现",
+    (f"{BASE}/reports/cash-flow-indirect", "error"):
+        "只在两法对不上（或无法自证）时出现",
+    (f"{BASE}/reports/fx-revaluation-preview", "note"):
+        "有外币余额但未登记期末汇率时才出现",
 }
 
 

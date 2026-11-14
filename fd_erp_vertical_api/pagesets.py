@@ -169,6 +169,10 @@ PROGRAM_IDENTITIES: frozenset[str] = frozenset({
     "system", "agent",
     "asset-engine", "billing-engine", "posting-engine", "bad-debt-engine",
     "cost-engine",
+    # 调汇车道的默认落款（`FxRevaluation.revalue(submitted_by=...)` 的缺省值）与它的
+    # 引擎名。漏进来会被「不在任职名单」拦成 403「缺权限码」，而正确答案是 400
+    # 「须人工经办」——**两种拒绝指向的处置完全不同**：前者让人去配名单，后者让人换人。
+    "fx-engine", "fx-revaluation",
 })
 
 #: 配置里可用的短键（`{"read": [...]}`）到全名的映射。
