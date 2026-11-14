@@ -1991,3 +1991,43 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth,
         """
         who = _human(ctx["staff"])
         return ok_shell(d.month_end.run(period, actor=who, close=True))
+
+    # ---- 三本账（账 → 凭证；与三张报表同期间口径）----
+
+    @app.get("/erp/supply-chain/v1/fi/books/balances")
+    async def fi_book_balances(request: Request,
+                               ctx: dict = Depends(fi_route("finance.read"))):
+        """科目余额表（三栏）。不平时如实带 `error`——不调行凑平。"""
+        return ok_shell(d.books.account_balances(_period(request)))
+
+    @app.get("/erp/supply-chain/v1/fi/books/ledger/{account_code}")
+    async def fi_subsidiary_ledger(request: Request, account_code: str,
+                                   ctx: dict = Depends(fi_route("finance.read"))):
+        """明细账：逐笔流水 + 逐行余额。
+
+        `limit` 只截**显示行**，合计与期末仍按全量算——否则「最后一行的余额」会骗人。
+        """
+        raw = (request.query_params.get("limit") or "").strip()
+        try:
+            limit = int(raw) if raw else 0
+        except ValueError:
+            raise ApiError("INVALID_ARGUMENT", f"limit 须为整数：{raw!r}") from None
+        if limit < 0:
+            raise ApiError("INVALID_ARGUMENT", f"limit 不能为负：{limit}")
+        return ok_shell(d.books.subsidiary_ledger(
+            account_code, _period(request), limit=limit))
+
+    @app.get("/erp/supply-chain/v1/fi/books/party-statement")
+    async def fi_party_statement(request: Request,
+                                 ctx: dict = Depends(fi_route("finance.read"))):
+        """往来对账单：某客户/供应商的跨科目明细，指定 `accounts` 时对回总账。
+
+        归属只认显式维度（`dimensions[dimension]`）——靠科目名或摘要文字猜归属，
+        迟早把两家的往来记到一家头上。
+        """
+        params = request.query_params
+        raw_accounts = (params.get("accounts") or "").strip()
+        accounts = [a.strip() for a in raw_accounts.split(",") if a.strip()]
+        return ok_shell(d.books.party_statement(
+            params.get("dimension"), params.get("value"), _period(request),
+            accounts=accounts or None))

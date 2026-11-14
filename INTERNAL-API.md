@@ -236,3 +236,26 @@ detail 里指明应费用化。`amount: null` 是**显式取消**门槛——`am
 分录」变成既成事实。已关账期间重跑会被拒并提示先重开（带理由）。
 
 **没有 `partial` 逃生阀**：成本未知时整期拒是车道设计（结转偏小的营业成本会让毛利虚高）。
+
+## 1i. 三本账（账 → 凭证）
+
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
+|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/books/balances` | `period` | 三栏式逐科目「期初 + 本期借 − 本期贷 = 期末」+ `totals` + `balanced` + 表外科目 `unclassified` | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/books/ledger/{accountCode}` | `period`（可选，缺省从建账起）、`limit`（只截显示行） | 逐笔流水 + 逐行 `balance` + `totals` + `closingBalance` + `truncated`/`rowCount` | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/books/party-statement` | `dimension`、`value`（均必填）、`period`、`accounts`（逗号分隔，给了才对总账） | 跨科目小计 + 逐行余额 + `reconciliation`（本单 + 未标注 vs 总账）+ `consistent` | `finance.read` |
+
+**三张表之外还要有账**：查一笔钱去哪了，靠的不是资产负债表，是「科目余额表 → 明细账 → 那张凭证」。
+
+**期间口径与报表同源**（业务日期优先的月度期间）：账簿若另用落账时刻分窗，同一期的账簿与报表
+会各自对不上而每本都「自洽」。所以这三本账必须由这一层投影，不能另写一套。
+
+**明细账 `limit` 只截显示行**：`totals` 与 `closingBalance` 永远按全量算，截断时标 `truncated`
+与 `rowCount`——只截合计会让「最后一行的余额」骗人。
+
+**往来对账单只认显式维度**：`dimensions[dimension] == value`。靠科目名或摘要文字猜归属，
+迟早把两家的往来记到一家头上。指定 `accounts` 时把「该科目未标该维度」的净额单列并对回总账，
+差额如实报出、**不摊给某个往来方**。
+
+**逐行 `balance` 是按科目走的**：各科目相加恒为零（每笔分录借贷必平），那种「余额」看着一路
+归零、对查账无用。看往来余额请看 `subtotals` 里应收/应付那一行。
