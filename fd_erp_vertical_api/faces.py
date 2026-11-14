@@ -2017,6 +2017,33 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth,
         return ok_shell(d.books.subsidiary_ledger(
             account_code, _period(request), limit=limit))
 
+    @app.get("/erp/supply-chain/v1/fi/books/journal")
+    async def fi_journal(request: Request,
+                         ctx: dict = Depends(fi_route("finance.read"))):
+        """序时账：按凭证汇总，逐凭证一行。
+
+        `txnId` 只能从明细账行里捡到时，「先知道要查哪个科目」成了前提；序时账把这一段
+        期间发生了哪些业务按凭证摊开，是查账的起点。`limit` 只截显示行。
+        """
+        raw = (request.query_params.get("limit") or "").strip()
+        try:
+            limit = int(raw) if raw else 0
+        except ValueError:
+            raise ApiError("INVALID_ARGUMENT", f"limit 须为整数：{raw!r}") from None
+        if limit < 0:
+            raise ApiError("INVALID_ARGUMENT", f"limit 不能为负：{limit}")
+        return ok_shell(d.books.journal(_period(request), limit=limit))
+
+    @app.get("/erp/supply-chain/v1/fi/books/voucher/{txn_id}")
+    async def fi_voucher(txn_id: str,
+                         ctx: dict = Depends(fi_route("finance.read"))):
+        """单张凭证：全部借贷行 + 合计 + 平衡断言 + `isClosing`。
+
+        这是「账」与「表」之间唯一不可替代的一步：报表说这一期费用 12 万、明细账说某天
+        有一笔 3000 挂着某个 `txnId`，而那 3000 借的是费用还是预付——只有凭证能答。
+        """
+        return ok_shell(d.books.voucher(txn_id))
+
     @app.get("/erp/supply-chain/v1/fi/books/party-statement")
     async def fi_party_statement(request: Request,
                                  ctx: dict = Depends(fi_route("finance.read"))):

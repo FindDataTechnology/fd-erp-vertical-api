@@ -70,6 +70,10 @@ def _seed(client) -> None:
     _confirm_all(d)
 
 
+def _pending(d) -> int:
+    return len(d.kernel.list_proposals(status="pending")["proposals"])
+
+
 def _row(payload, code):
     return next(r for r in payload["rows"] if r["accountCode"] == code)
 
@@ -198,3 +202,79 @@ def test_party_statement_requires_both_keys(ro, params):
     res = ro.get(f"{BASE}/books/party-statement", params=params, headers=H)
     assert res.status_code == 400, res.text
     assert res.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+# ---- 4) 序时账与凭证（change: add-fi-voucher-and-journal）----
+
+def test_journal_lists_vouchers_with_balanced_totals(ro):
+    _seed(ro)
+    body = ro.get(f"{BASE}/books/journal", params={"period": PERIOD},
+                  headers=H).json()["data"]
+    assert body["balanced"] is True, body.get("error")
+    # 销售 3 行（应收 / 收入 / 销项）+ 采购 3 行（成本 / 进项 / 应付）
+    assert body["vouchers"] == 2 and body["lines"] == 6
+    rows = {r["sourceRef"]: r for r in body["rows"]}
+    sale = rows["vat-sale:BK-S1"]
+    assert sale["debit"] == "1130.00" and sale["credit"] == "1130.00"
+    assert sale["balanced"] is True
+    assert sale["isClosing"] is False
+
+
+def test_journal_limit_truncates_only_the_listing(ro):
+    _seed(ro)
+    body = ro.get(f"{BASE}/books/journal",
+                  params={"period": PERIOD, "limit": 1}, headers=H).json()["data"]
+    assert body["truncated"] is True and body["rowCount"] == 2
+    assert len(body["rows"]) == 1
+    assert body["totals"]["debit"] == "1695.00"              # 1130 + 565，按全量
+
+
+def test_voucher_opens_the_entries_behind_a_ledger_line(ro):
+    """从明细账拿 txnId → 打开凭证看借贷两方（查账的最后一步）。"""
+    _seed(ro)
+    ledger = ro.get(f"{BASE}/books/ledger/1100", params={"period": PERIOD},
+                    headers=H).json()["data"]
+    txn = ledger["rows"][0]["txnId"]
+    assert txn
+
+    body = ro.get(f"{BASE}/books/voucher/{txn}", headers=H).json()["data"]
+    assert body["txnId"] == txn
+    assert body["balanced"] is True, body.get("error")
+    codes = [r["accountCode"] for r in body["lines"]]
+    assert "1100" in codes and "4000" in codes
+    assert body["totals"]["debit"] == body["totals"]["credit"]
+    assert body["sourceRef"] == "vat-sale:BK-S1"
+
+
+def test_voucher_surfaces_a_closing_voucher(ro):
+    d = ro.app.state.drivers
+    _seed(ro)
+    d.closing.transfer(PERIOD, submitted_by="cfo@example")
+    _confirm_all(d)
+    journal = ro.get(f"{BASE}/books/journal", params={"period": PERIOD},
+                     headers=H).json()["data"]
+    closing = [r for r in journal["rows"] if r["isClosing"]]
+    assert len(closing) == 1
+    body = ro.get(f"{BASE}/books/voucher/{closing[0]['txnId']}",
+                  headers=H).json()["data"]
+    assert body["isClosing"] is True
+
+
+def test_unknown_voucher_is_404(ro):
+    res = ro.get(f"{BASE}/books/voucher/nope", headers=H)
+    assert res.status_code == 404
+    assert res.json()["error"]["code"] == "NOT_FOUND"
+    assert res.json()["error"]["detail"]["txnId"] == "nope"
+
+
+def test_books_are_read_only(ro):
+    _seed(ro)
+    d = ro.app.state.drivers
+    before = (len(d.kernel.query_entries(account_code="1100")["entries"]),
+              _pending(d))
+    ro.get(f"{BASE}/books/journal", params={"period": PERIOD}, headers=H)
+    txn = ro.get(f"{BASE}/books/ledger/1100", params={"period": PERIOD},
+                 headers=H).json()["data"]["rows"][0]["txnId"]
+    ro.get(f"{BASE}/books/voucher/{txn}", headers=H)
+    assert (len(d.kernel.query_entries(account_code="1100")["entries"]),
+            _pending(d)) == before

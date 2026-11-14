@@ -243,6 +243,8 @@ detail 里指明应费用化。`amount: null` 是**显式取消**门槛——`am
 |---|---|---|---|---|
 | GET | `/erp/supply-chain/v1/fi/books/balances` | `period` | 三栏式逐科目「期初 + 本期借 − 本期贷 = 期末」+ `totals` + `balanced` + 表外科目 `unclassified` | `finance.read` |
 | GET | `/erp/supply-chain/v1/fi/books/ledger/{accountCode}` | `period`（可选，缺省从建账起）、`limit`（只截显示行） | 逐笔流水 + 逐行 `balance` + `totals` + `closingBalance` + `truncated`/`rowCount` | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/books/journal` | `period`（可选）、`limit`（只截显示行） | 序时账：按凭证汇总（日期/`txnId`/来源/借合计/贷合计/行数/维度/`isClosing`）+ `totals` + `vouchers` | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/books/voucher/{txnId}` | — | 单张凭证的全部借贷行（科目/借/贷/维度）+ `totals` + `balanced` + `isClosing`；不存在 → `NOT_FOUND` | `finance.read` |
 | GET | `/erp/supply-chain/v1/fi/books/party-statement` | `dimension`、`value`（均必填）、`period`、`accounts`（逗号分隔，给了才对总账） | 跨科目小计 + 逐行余额 + `reconciliation`（本单 + 未标注 vs 总账）+ `consistent` | `finance.read` |
 
 **三张表之外还要有账**：查一笔钱去哪了，靠的不是资产负债表，是「科目余额表 → 明细账 → 那张凭证」。
@@ -259,6 +261,14 @@ detail 里指明应费用化。`amount: null` 是**显式取消**门槛——`am
 
 **逐行 `balance` 是按科目走的**：各科目相加恒为零（每笔分录借贷必平），那种「余额」看着一路
 归零、对查账无用。看往来余额请看 `subtotals` 里应收/应付那一行。
+
+**序时账是查账的起点，凭证是终点**：`txnId` 只能从明细账行里捡到时，「先知道要查哪个科目」
+成了前提；序时账按凭证摊开一段期间的全部业务。查到 `txnId` 之后用
+`/fi/books/voucher/{txnId}` 打开那张凭证——「这笔 3000 借的是费用还是预付、对方科目是什么、
+有没有标成本中心」只有凭证能答，这也是审计问的第一个问题。
+
+**结转凭证会被标出来**（`isClosing`）：它把损益搬进权益，金额看着像一笔业务发生额，
+不标出来会被误读。报表口径排除它，凭证视图也让人看得见它是什么。
 
 ## 1j. 成本层与期末结转（月结清单第一步的料）
 
