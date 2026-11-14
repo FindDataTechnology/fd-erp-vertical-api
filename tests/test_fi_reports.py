@@ -27,7 +27,11 @@ FI_AND_UE = {"supply-chain.fi": ["finance.read"],
 TENANT_HEADER = {"X-ERP-Tenant": "tnt-demo"}
 STAFF_HEADER = {"X-ERP-Staff": "cfo@example"}
 
-ENDPOINTS = ("balance-sheet", "income-statement", "cash-flow", "vat-return")
+ENDPOINTS = ("balance-sheet", "income-statement", "cash-flow", "vat-return",
+             "surcharges", "income-tax-prepay", "filing-summary")
+
+#: 读权限 + 写权限两档：只读账号看不到「能改申报数」这回事。
+FI_RW = {"supply-chain.fi": ["finance.read", "finance.write"]}
 
 
 def _app(tmp_path, dsn, grants):
@@ -211,3 +215,82 @@ def test_the_internal_key_is_still_grantable_server_side():
     auth = load_pageset_auth(inline_json=json.dumps(FI_ONLY))
     assert auth.grants_of("supply-chain.fi") == frozenset({"finance.read"})
     assert auth.wire_payload()["pagesets"] == []
+
+
+# ---- 5) 申报动作：读写分档、预演不写账 ----
+
+@pytest.fixture()
+def fi_rw_client(reset_db, tmp_path, dsn):
+    client = _app(tmp_path, dsn, FI_RW)
+    client.app.state.drivers.cn_filing.register_rates(
+        {"city_construction": "7", "education_surcharge": "3",
+         "local_education_surcharge": "2", "income_tax": "25"},
+        effective_from="2026-01", source="测试：现行税法")
+    _seed(client)
+    return client
+
+
+def _pending(d) -> int:
+    return len(d.kernel.list_proposals(status="pending")["proposals"])
+
+
+def test_a_read_only_account_cannot_register_a_filing_number(fi_client):
+    """读权限不能改申报数：被拒，且确实没落账。"""
+    res = fi_client.post("/erp/supply-chain/v1/fi/filings/vat-return",
+                         headers={**TENANT_HEADER, **STAFF_HEADER},
+                         json={"period": "2026-11", "source": "电子税局",
+                               "sales": "2000", "outputVat": "130"})
+    assert res.status_code == 403
+    assert res.json()["error"]["code"] == "GRANT_REQUIRED"
+    got = fi_client.get("/erp/supply-chain/v1/fi/reports/vat-return?period=2026-11",
+                        headers={**TENANT_HEADER, **STAFF_HEADER})
+    assert got.json()["data"]["provided"] is False
+
+
+def test_a_write_account_registers_and_the_number_is_readable_at_once(fi_rw_client):
+    res = fi_rw_client.post("/erp/supply-chain/v1/fi/filings/vat-return",
+                            headers={**TENANT_HEADER, **STAFF_HEADER},
+                            json={"period": "2026-11", "source": "电子税局 2026-11",
+                                  "sales": "2000", "outputVat": "130",
+                                  "inputVat": "0", "inputTransferOut": "0",
+                                  "openingCredit": "0"})
+    assert res.status_code == 200, res.json()
+    got = fi_rw_client.get("/erp/supply-chain/v1/fi/reports/vat-return?period=2026-11",
+                           headers={**TENANT_HEADER, **STAFF_HEADER})
+    data = got.json()["data"]
+    assert data["provided"] is True
+    assert data["declaredSource"] == "电子税局 2026-11"
+
+
+def test_the_two_preview_endpoints_leave_the_proposal_set_unchanged(fi_rw_client):
+    """读接口绝不在账上留提案——看数就生成两笔待确认提案，是最难查的副作用。"""
+    d = fi_rw_client.app.state.drivers
+    before = _pending(d)
+    for name in ("surcharges", "income-tax-prepay"):
+        res = fi_rw_client.get(f"/erp/supply-chain/v1/fi/reports/{name}?period=2026-11",
+                               headers={**TENANT_HEADER, **STAFF_HEADER})
+        assert res.status_code == 200, name
+        assert res.json()["data"]["proposed"] is False, name
+        assert "stableId" not in res.json()["data"], name
+    assert _pending(d) == before
+
+
+def test_the_preview_endpoints_report_the_same_numbers_as_a_real_run(fi_rw_client):
+    """预演要是另一个数，它就只是安慰。"""
+    d = fi_rw_client.app.state.drivers
+    preview = fi_rw_client.get(
+        "/erp/supply-chain/v1/fi/reports/surcharges?period=2026-11",
+        headers={**TENANT_HEADER, **STAFF_HEADER}).json()["data"]
+    real = d.cn_filing.surcharges("2026-11")
+    assert preview["total"] == real["total"]
+    assert preview["base"] == real["base"]
+
+
+def test_the_filing_summary_is_readable(fi_rw_client):
+    res = fi_rw_client.get(
+        "/erp/supply-chain/v1/fi/reports/filing-summary?period=2026-11",
+        headers={**TENANT_HEADER, **STAFF_HEADER})
+    assert res.status_code == 200, res.json()
+    data = res.json()["data"]
+    assert data["period"] == "2026-11"
+    assert "vat" in data

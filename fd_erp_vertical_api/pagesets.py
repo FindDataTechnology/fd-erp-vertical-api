@@ -69,6 +69,8 @@ KNOWN_GRANTS: frozenset[str] = frozenset({
 INTERNAL_GRANTS: frozenset[str] = frozenset({
     # FI 财务后台（supply-chain.fi）：读三张法定报表与增值税申报口径
     "finance.read",
+    # FI 财务后台：登记申报数（写）。读权限 MUST NOT 覆盖它——看数与改申报数是两件事。
+    "finance.write",
 })
 
 #: 服务端实际接受的全部 grant 码（契约锚 + 内部）；授权配置按这一层收敛。

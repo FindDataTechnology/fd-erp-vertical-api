@@ -1377,6 +1377,42 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth) -> None:
         """现金流量表（直接法；本期 + 上年同期 + 本年累计，含两条自证脚注）。"""
         return ok_shell(d.cn_statements.cash_flow(_period(request)))
 
+    @app.get("/erp/supply-chain/v1/fi/reports/surcharges")
+    async def fi_surcharges(request: Request,
+                            ctx: dict = Depends(fi_route("finance.read"))):
+        """附加税预演：只算不写。
+
+        走 `preview=True`——读接口绝不在账上留提案。「这期要缴多少」是看一眼的事，
+        看一眼就生成两笔待确认提案，是谁点的、点两次会不会重复，事后都说不清。
+        """
+        return ok_shell(d.cn_filing.surcharges(_period(request), preview=True))
+
+    @app.get("/erp/supply-chain/v1/fi/reports/income-tax-prepay")
+    async def fi_income_tax_prepay(request: Request,
+                                   ctx: dict = Depends(fi_route("finance.read"))):
+        """所得税预缴预演：只算不写（与附加税同一纪律）。"""
+        return ok_shell(d.cn_filing.income_tax_prepay(_period(request), preview=True))
+
+    @app.get("/erp/supply-chain/v1/fi/reports/filing-summary")
+    async def fi_filing_summary(request: Request,
+                                ctx: dict = Depends(fi_route("finance.read"))):
+        """三税一张表：增值税 + 附加税 + 所得税预缴，并与账面逐项对比。"""
+        return ok_shell(d.cn_filing.filing_summary(_period(request)))
+
+    @app.post("/erp/supply-chain/v1/fi/filings/vat-return")
+    async def fi_register_vat_return(request: Request,
+                                     ctx: dict = Depends(fi_route("finance.write"))):
+        """登记某期间申报数（电子税局实际报出去的数）。
+
+        写动作，权限码独立于 `finance.read`：能看申报表不等于能改申报数。
+        `source` 由申报车道强制必填——申报是外部事实，无出处无法复核。
+        """
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        period = body.pop("period", None)
+        return ok_shell(d.cn_filing.register_vat_return(period, **body))
+
     @app.get("/erp/supply-chain/v1/fi/reports/vat-return")
     async def fi_vat_return(request: Request,
                             ctx: dict = Depends(fi_route("finance.read"))):

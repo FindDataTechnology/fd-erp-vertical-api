@@ -39,3 +39,18 @@
 
 报表导出 PDF/Excel、报表缓存与预聚合、报表侧写账或调账——投影口径下都属于另一层，
 且缓存会让「报表是分录的投影」不再成立。
+
+## 1b. 申报动作（读与写分档）
+
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
+|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/reports/surcharges` | `period` | 附加税预演：`base`（应纳增值税）、三项 `items`、`total`、`proposed=false`（只算不写） | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/reports/income-tax-prepay` | `period` | 所得税预缴预演：`cumulativeProfit`、`target`、`alreadyPrepaid`、`due`、`proposed=false` | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/reports/filing-summary` | `period` | 增值税 + 三项附加税 + 所得税预缴一张表，并与账面 5403 / 5801 逐项对比 | `finance.read` |
+| POST | `/erp/supply-chain/v1/fi/filings/vat-return` | JSON：`period`、`source`（必填）、`sales`/`outputVat`/`inputVat`/`inputTransferOut`/`openingCredit` | 登记结果：`declared`、`source`；同期间后一次为准 | `finance.write` |
+
+**读与写必须分档**：`finance.read` 能看预演与汇总，但 MUST NOT 能改申报数；
+登记端点要求 `finance.write`，只有读权限调用 MUST 被拒（`GRANT_REQUIRED`）。
+
+**预演不写账**：两个预演端点的返回体 `proposed=false`，且内核待确认提案集合调用前后不变。
+「看一眼要缴多少」不得在账上留提案——谁点的、点两次是否重复，事后都说不清。
