@@ -9,6 +9,8 @@
 - ERP_PAGESET_AUTH         页面集授权配置（内联 JSON），优先于文件
 - ERP_PAGESET_AUTH_FILE    页面集授权配置 JSON 文件路径（fail-closed）
 - ERP_WMS_SNAPSHOT_FILE    WMS 库存快照 JSON 文件路径（缺省无快照源，如实降级）
+- ERP_CN_CHART             中国国别包所依据的准则文件名（accounts-small.json 缺省 /
+                           accounts-large.json）；非法值装配即拒，不静默退回
 
 BYOK 纪律：外部系统凭证只经环境变量注入，本模块不读取、不缓存、不落库任何
 凭证明文；DSN 等敏感值绝不进日志（本模块无日志输出）。
@@ -53,6 +55,10 @@ class Settings:
     #: 信用占用失效时点上限（天），与内核同口径（change: close-orphan-credit-reservations）。
     #: 内核缺该字段时自己回退到同一默认值；这里显式声明是为了让部署侧可配。
     credit_reservation_max_days: int = 90
+    #: 中国国别包所依据的准则（change: add-cn-chart-selection-wiring）。
+    #: 取 localization/cn 下的**准则文件名**而不是自造 small|large 别名：CnPack 的词汇表
+    #: 就是文件名，多一层别名映射就多一处「映射写错」的可能。非法值由装配层拒。
+    cn_chart: str = "accounts-small.json"
     extra: dict = field(default_factory=dict)
 
     @classmethod
@@ -69,6 +75,8 @@ class Settings:
             pageset_auth_file=_env("ERP_PAGESET_AUTH_FILE"),
             wms_snapshot_file=_env("ERP_WMS_SNAPSHOT_FILE"),
             credit_reservation_max_days=_int_env("ERP_CREDIT_RESERVATION_MAX_DAYS", 90),
+            cn_chart=_env("ERP_CN_CHART", "accounts-small.json")
+            or "accounts-small.json",
         )
 
     def data_path(self) -> Path:

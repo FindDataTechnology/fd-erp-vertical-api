@@ -37,7 +37,9 @@ from fd_erp_vertical_templates.cn_tax import CnVatLane
 from fd_erp_vertical_templates.cn_statements import CnStatements
 from fd_erp_vertical_templates.cn_invoice import CnInvoiceBook
 from fd_erp_vertical_templates.cn_filing import CnFilingLane
-from fd_erp_vertical_templates.localization import CnPack
+from fd_erp_vertical_templates.errors import TemplateError
+from fd_erp_vertical_templates.localization import (CHART_LARGE, CHART_SMALL,
+                                                    CnPack)
 from fd_erp_vertical_templates.month_end import MonthEndChecklist
 from .periods import PeriodBook
 from fd_erp_vertical_templates.assets import FixedAssetLane
@@ -155,6 +157,25 @@ def load_wms_snapshot(path: str | None) -> list[dict[str, Any]]:
     return body if isinstance(body, list) else []
 
 
+
+def _cn_pack(settings: Any) -> CnPack:
+    """按 `ERP_CN_CHART` 装国别包；非法值在装配阶段即拒。
+
+    这条兜底不是为了好看：静默退回小企业会让一次配置拼错表现为「报表口径变了」，
+    而部署记录里看不出任何异常——出错的形态是给客户出了一张错准则的表。
+    """
+    chart = str(getattr(settings, "cn_chart", None) or CHART_SMALL).strip()
+    try:
+        return CnPack(chart=chart)
+    except TemplateError as exc:
+        raise TemplateError(
+            "INVALID_ARGUMENT",
+            f"ERP_CN_CHART 只接受 localization/cn 下的准则文件名，收到 {chart!r}："
+            f"{exc.message}",
+            detail={"env": "ERP_CN_CHART", "received": chart,
+                    "allowed": [CHART_SMALL, CHART_LARGE]}) from exc
+
+
 def build_drivers(settings: Settings, kernel) -> Drivers:
     """装配模板层驱动（kernel 为 KernelClient 协议实现，本模块不感知形态）。"""
     data_dir = settings.data_path()
@@ -218,7 +239,8 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     manufacturing = ManufacturingLane(settings.tenant_id, data_dir, kernel,
                                       base_currency=settings.base_currency)
     # 中国国别包：科目表/税码/映射/报表项目都是数据（Odoo l10n_cn 出处见 PROVENANCE）。
-    cn_pack = CnPack()
+    # 依据哪套准则由 ERP_CN_CHART 决定；非法值在这里就炸，不静默退回小企业。
+    cn_pack = _cn_pack(settings)
     # 增值税：只出待确认提案；月末把「销项 − 进项」转到未交增值税。
     cn_tax = CnVatLane(settings.tenant_id, kernel,
                        base_currency=settings.base_currency, pack=cn_pack)
