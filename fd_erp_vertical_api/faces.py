@@ -45,6 +45,8 @@ from .pagesets import PagesetAuth, require_grant
 PAGESET_SE = "supply-chain.se"
 PAGESET_SP = "supply-chain.sp"
 PAGESET_CP = "supply-chain.cp"
+#: 内部页集（只在服务端守门，不进 /pagesets 载荷）
+PAGESET_FI = "supply-chain.fi"
 
 STAFF_HEADER = "X-ERP-Staff"
 SUPPLIER_HEADER = "X-ERP-Supplier"
@@ -1325,3 +1327,62 @@ def register_cp_face(app, settings, d: Drivers, kernel,
         return ok_shell(out)
 
     # 契约 §7：AI 助手入口无独立端点（复用底座 chat/WS 面）。
+
+
+# ---- FI 财务后台（内部页集 supply-chain.fi：不进 /pagesets 载荷）----
+
+def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth) -> None:
+    """财务后台四个只读报表端点。
+
+    为什么是与四个业务页集**并列的一面**，而不是它们的子集：公司自己的资产负债表 /
+    利润表 / 现金流量表不属于任何供应链外部角色。放进客户订货小程序既是放错位置，
+    也是一处暴露面——而对外页集 key 由客户端硬编码校验，多吐一个会整包作废。
+    所以这里是 `INTERNAL_PAGESET_KEYS`：服务端能授权、能守门、能审计，载荷里不出现。
+
+    四个端点都是**投影**：不写账、不建表、不缓存，直接调 `CnStatements`。
+    报表自己的对照列（年初数 / 上年同期 / 本年累计）与自证字段随之一起返回，
+    不在这一层重算任何数——重算就是第二份口径。
+    """
+    def fi_route(grant: str):
+        def _dep(request: Request) -> dict[str, Any]:
+            request.state.erp_grant = grant
+            require_grant(auth, PAGESET_FI, grant)
+            staff = request.headers.get(STAFF_HEADER, "").strip()
+            if not staff:
+                raise ApiError(
+                    "AUTH_REQUIRED",
+                    f"缺少财务身份头 {STAFF_HEADER}"
+                    "（FI 身份=财务员工号；租户头是常量，不能单独当凭据）")
+            return {"staff": staff}
+        return _dep
+
+    def _period(request: Request) -> Any:
+        return request.query_params.get("period")
+
+    @app.get("/erp/supply-chain/v1/fi/reports/balance-sheet")
+    async def fi_balance_sheet(request: Request,
+                               ctx: dict = Depends(fi_route("finance.read"))):
+        """资产负债表（期末 + 年初）。"""
+        return ok_shell(d.cn_statements.balance_sheet(_period(request)))
+
+    @app.get("/erp/supply-chain/v1/fi/reports/income-statement")
+    async def fi_income_statement(request: Request,
+                                  ctx: dict = Depends(fi_route("finance.read"))):
+        """利润表（本期 + 上年同期 + 本年累计）。"""
+        return ok_shell(d.cn_statements.income_statement(_period(request)))
+
+    @app.get("/erp/supply-chain/v1/fi/reports/cash-flow")
+    async def fi_cash_flow(request: Request,
+                           ctx: dict = Depends(fi_route("finance.read"))):
+        """现金流量表（直接法；本期 + 上年同期 + 本年累计，含两条自证脚注）。"""
+        return ok_shell(d.cn_statements.cash_flow(_period(request)))
+
+    @app.get("/erp/supply-chain/v1/fi/reports/vat-return")
+    async def fi_vat_return(request: Request,
+                            ctx: dict = Depends(fi_route("finance.read"))):
+        """增值税申报口径 vs 账面口径。
+
+        不传 `declared` 时按账面视同申报，并在口径说明里写明「未提供独立申报数」——
+        不能让读者以为核过了。
+        """
+        return ok_shell(d.cn_statements.vat_return(_period(request)))

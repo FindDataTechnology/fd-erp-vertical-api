@@ -42,6 +42,7 @@ CAPABILITY_BY_SEGMENT = {
     "se": "supply-chain.se",
     "sp": "supply-chain.sp",
     "cp": "supply-chain.cp",
+    "fi": "supply-chain.fi",     # 内部财务面（无对外页集；见 INTERNAL-API.md）
 }
 
 

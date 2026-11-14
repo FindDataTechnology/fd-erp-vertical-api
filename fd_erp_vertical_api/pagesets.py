@@ -21,14 +21,30 @@ from typing import Any
 
 from .errors import ApiError
 
-#: 页面集 key 白名单（与 paas/miniapp/src/pagesets/authorize.ts KNOWN_KEYS 一字不差；
-#: 输出白名单外的 key 会让客户端整体 fail-closed 作废 —— 绝不输出）
-KNOWN_PAGESET_KEYS: tuple[str, ...] = (
+#: **对外发布**的页集 key（与 paas/miniapp/src/pagesets/authorize.ts KNOWN_KEYS 一字不差；
+#: GET /pagesets 的输出只会遍历这一层。多吐一个客户端不认识的 key，客户端会整体
+#: fail-closed 作废——连带把四个业务页集一起打掉，所以这一层不许随手加。
+PUBLISHED_PAGESET_KEYS: tuple[str, ...] = (
     "supply-chain.ue",
     "supply-chain.se",
     "supply-chain.sp",
     "supply-chain.cp",
 )
+
+#: **内部**页集 key：只用于服务端端点闸，**绝不进 /pagesets 载荷**。
+#: 存在的理由：公司自己的财报属于财务后台（桌面/工具），不属于客户订货小程序；
+#: 但它同样需要「页集授权 + grant + 身份头」三件齐备，而不是只凭租户头裸开。
+INTERNAL_PAGESET_KEYS: tuple[str, ...] = (
+    "supply-chain.fi",
+)
+
+#: 契约锚：与 paas 客户端 `KNOWN_KEYS` **一字不差**（`tests/test_authz_contract.py` 逐项对拍）。
+#: 只含对外发布层——内部页集进这个元组会立刻让那条跨仓契约闸变红，那是对的：
+#: 客户端不认识它，服务端就不该把它算进「客户端契约」。
+KNOWN_PAGESET_KEYS: tuple[str, ...] = PUBLISHED_PAGESET_KEYS
+
+#: 服务端实际接受的全部页集 key（对外 + 内部）。授权配置按这一层收敛。
+ALL_PAGESET_KEYS: tuple[str, ...] = PUBLISHED_PAGESET_KEYS + INTERNAL_PAGESET_KEYS
 
 #: grant 码封闭集（paas/miniapp/src/pagesets/registry.ts 四页面集 requiredGrants
 #: 与页级 requiredGrants 的并集；配置中出现集外码一律丢弃 —— 封闭集纪律）
@@ -47,6 +63,17 @@ KNOWN_GRANTS: frozenset[str] = frozenset({
     "pickup.checkin", "pod.report", "freight.statement.read",
 })
 
+#: **内部** grant 码（只服务内部页集，不进客户端契约）。
+#: 与页集 key 同样分两层：`KNOWN_GRANTS` 是契约锚（等于 paas 四个页集 requiredGrants 并集），
+#: 内部面的权限码放这里，`ALL_GRANTS` 才是服务端实际接受的集合。
+INTERNAL_GRANTS: frozenset[str] = frozenset({
+    # FI 财务后台（supply-chain.fi）：读三张法定报表与增值税申报口径
+    "finance.read",
+})
+
+#: 服务端实际接受的全部 grant 码（契约锚 + 内部）；授权配置按这一层收敛。
+ALL_GRANTS: frozenset[str] = KNOWN_GRANTS | INTERNAL_GRANTS
+
 
 @dataclass(frozen=True)
 class PagesetAuth:
@@ -60,9 +87,11 @@ class PagesetAuth:
 
     def wire_payload(self) -> dict[str, Any]:
         """GET /pagesets 响应 data：与 paas parsePagesetAuth 逐字段对齐。"""
+        # 只遍历对外发布层：内部页集（supply-chain.fi）即使已授权也不能出现在这里，
+        # 否则客户端解析遇到未知 key 会整包作废。
         return {"pagesets": [
             {"key": key, "grants": sorted(self.grants_by_key[key])}
-            for key in KNOWN_PAGESET_KEYS if key in self.grants_by_key
+            for key in PUBLISHED_PAGESET_KEYS if key in self.grants_by_key
         ]}
 
 
@@ -72,9 +101,9 @@ def _normalize(raw: Any) -> PagesetAuth:
     if not isinstance(raw, dict):
         return PagesetAuth({})
     for key, grants in raw.items():
-        if key not in KNOWN_PAGESET_KEYS or not isinstance(grants, list):
+        if key not in ALL_PAGESET_KEYS or not isinstance(grants, list):
             continue
-        cleaned = sorted({g for g in grants if isinstance(g, str) and g in KNOWN_GRANTS})
+        cleaned = sorted({g for g in grants if isinstance(g, str) and g in ALL_GRANTS})
         out[key] = frozenset(cleaned)
     return PagesetAuth(out)
 

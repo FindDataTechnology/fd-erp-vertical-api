@@ -30,7 +30,8 @@ from .drivers import build_drivers, stock_visibility
 from .envelope import error_shell, list_shell, ok_shell, parse_page_params
 from .errors import (ApiError, adapt_exception, http_status_for,
                      invoice_degraded)
-from .faces import register_cp_face, register_se_face, register_sp_face
+from .faces import (register_cp_face, register_fi_face, register_se_face,
+                    register_sp_face)
 from .kernel_client import build_kernel_client, ensure_kernel_proxy
 from .logs import access_log_middleware
 from .observability import instrument_middleware
@@ -804,6 +805,8 @@ def create_app(settings: Settings, kernel=None, *,
                      app.state.pageset_auth)
     register_cp_face(app, settings, app.state.drivers, app.state.kernel,
                      app.state.pageset_auth)
+    # ---- FI 财务后台（内部页集：不进 /pagesets 载荷，见 pagesets.INTERNAL_PAGESET_KEYS）----
+    register_fi_face(app, settings, app.state.drivers, app.state.pageset_auth)
 
     # 请求计数（路由模板级，见 observability.py）。**必须最后注册**：Starlette 的
     # @app.middleware 是「后注册者在最外层」，放早了会被租户闸包在内侧，于是被闸
