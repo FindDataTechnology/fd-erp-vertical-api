@@ -1380,9 +1380,13 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth) -> None:
     @app.get("/erp/supply-chain/v1/fi/reports/vat-return")
     async def fi_vat_return(request: Request,
                             ctx: dict = Depends(fi_route("finance.read"))):
-        """增值税申报口径 vs 账面口径。
+        """增值税申报口径 vs 账面口径 + 进项三档。
 
-        不传 `declared` 时按账面视同申报，并在口径说明里写明「未提供独立申报数」——
-        不能让读者以为核过了。
+        走申报车道的 `vat_reconciliation`，而不是直接调报表：**申报数**要从车道里
+        已登记的拿、**进项三档**要把发票台账递进去。这两样都是「调用方忘了传就静默
+        少半张表」的形态（报表照样返回、`provided=false`、`inputTiers` 干脆没有），
+        所以供给方在车道里定死，端点不需要记得。
+
+        未登记申报数时仍按账面视同申报，`provided=false` 且口径说明写明「不能当作已核对」。
         """
-        return ok_shell(d.cn_statements.vat_return(_period(request)))
+        return ok_shell(d.cn_filing.vat_reconciliation(_period(request)))

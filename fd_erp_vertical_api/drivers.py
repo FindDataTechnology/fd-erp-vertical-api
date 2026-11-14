@@ -253,7 +253,7 @@ def build_drivers(settings: Settings, kernel) -> Drivers:
     # 附加税/所得税：复用上面那份增值税车道与法定报表（不同源就会算出两份口径）。
     # 税率是外部事实（地区/政策不同），由 register_rates 人工登记并带出处。
     cn_filing = CnFilingLane(settings.tenant_id, data_dir, kernel, vat=cn_tax,
-                             statements=cn_statements,
+                             statements=cn_statements, invoices=cn_invoices,
                              base_currency=settings.base_currency)
     # 建账期初：只在空账上录、只此一次；它定义的是「账本开始之前」的余额。
     opening = OpeningBalances(settings.tenant_id, kernel,

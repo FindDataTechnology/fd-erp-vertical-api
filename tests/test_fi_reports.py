@@ -154,7 +154,45 @@ def test_the_vat_return_is_readable_and_says_it_was_not_cross_checked(fi_client)
                         headers={**TENANT_HEADER, **STAFF_HEADER})
     assert res.status_code == 200
     data = res.json()["data"]
+    assert data["provided"] is False
     assert "未提供独立申报数" in json.dumps(data, ensure_ascii=False)
+
+
+def test_a_registered_filing_number_makes_the_report_say_it_was_checked(fi_client):
+    """接线判据：端点必须走申报车道——登记过申报数，`provided` 就得是 true。
+
+    只测 `CnFilingLane` 自己不算数：符号在、通路没接，正是我们踩过的形态。
+    """
+    d = fi_client.app.state.drivers
+    d.cn_filing.register_vat_return(
+        "2026-11", source="电子税局 2026-11 申报表", sales="2000",
+        outputVat="130", inputVat="0", inputTransferOut="0", openingCredit="0")
+    res = fi_client.get("/erp/supply-chain/v1/fi/reports/vat-return?period=2026-11",
+                        headers={**TENANT_HEADER, **STAFF_HEADER})
+    assert res.status_code == 200
+    data = res.json()["data"]
+    assert data["provided"] is True
+    assert data["declaredSource"] == "电子税局 2026-11 申报表"
+    assert data["consistent"] is False          # 账面没有销项科目，申报报了 130
+
+
+def test_the_input_tiers_reach_the_endpoint_from_the_invoice_book(fi_client):
+    """接线判据：台账里的三档必须出现在端点输出里（账上只有可抵那一档）。"""
+    d = fi_client.app.state.drivers
+    d.cn_invoices.register("purchase", "vat-special", "P-1", net="1000", tax="130",
+                           issued_on="2026-11-05")
+    d.cn_invoices.certify("P-1", certified_on="2026-11-06")
+    d.cn_invoices.register("purchase", "vat-special", "P-2", net="2000", tax="260",
+                           issued_on="2026-11-06")     # 可抵票种未认证
+    d.cn_invoices.register("purchase", "vat-general", "P-3", net="500", tax="65",
+                           issued_on="2026-11-07")     # 普票不可抵
+    res = fi_client.get("/erp/supply-chain/v1/fi/reports/vat-return?period=2026-11",
+                        headers={**TENANT_HEADER, **STAFF_HEADER})
+    assert res.status_code == 200
+    tiers = res.json()["data"]["inputTiers"]
+    assert Decimal(tiers["deductible"]) == Decimal("130.00")
+    assert Decimal(tiers["pendingCertification"]) == Decimal("260.00")
+    assert Decimal(tiers["nonDeductible"]) == Decimal("65.00")
 
 
 # ---- 4) 载荷隔离 ----
