@@ -16,9 +16,15 @@
 """
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 
 import pytest
+
+#: 财务任职名单：第四道闸（按人授权）要用它，否则 fi 端点一律 403。
+STAFF_ROSTER = json.dumps({"read": ["cfo@example"],
+                            "write": ["cfo@example"],
+                            "confirm": ["cfo@example"]})
 
 TENANT = "tnt-demo"
 PERIOD = "2026-11"
@@ -42,7 +48,8 @@ def env(reset_db, tmp_path, dsn):
     payload = json.dumps({"supply-chain.fi": ["finance.read", "finance.write",
                                              "finance.confirm"]})
     settings = Settings(tenant_id=TENANT, database_url=dsn, base_currency="CNY",
-                        data_dir=str(tmp_path / "data"), pageset_auth_json=payload)
+                        data_dir=str(tmp_path / "data"), pageset_auth_json=payload,
+                        finance_staff_json=STAFF_ROSTER)
     kernel = InProcessKernelClient(settings)
     app = create_app(settings, kernel,
                      pageset_auth=load_pageset_auth(inline_json=payload),

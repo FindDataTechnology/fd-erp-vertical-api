@@ -1,22 +1,66 @@
-# 内部面 API 契约（无页集 · 不进客户端载荷）
+# 内部面 API 契约（内部页集 `supply-chain.fi` · 不进客户端载荷）
 
-> 本文件声明**没有页面集**的服务端内部面：它们不是任何对外页集（ue/se/sp/cp）的一部分，
-> 也不属于 miniapp。声明在这里而不是 `templates/supply-chain/pagesets/*/api-contract.md`，
+> 本文件声明**内部页集 `supply-chain.fi`** 的服务端面：它不属于任何对外页集（ue/se/sp/cp），
+> 也不进 miniapp。声明在这里而不是 `templates/supply-chain/pagesets/*/api-contract.md`，
 > 是因为页面集契约那一层被覆盖矩阵度量（功能点对账表、域计数、已提交快照），
-> 把内部面塞进去会改变一个封闭空间的度量——而内部面根本没有页面。
+> 把内部面塞进去会改变一个封闭空间的度量——而内部面没有面向客户的页面。
 >
 > **同源纪律：本文件声明的端点没有平行取数路径**，四张报表都是分录的投影。
 
 ## 0. 通用约定
 
-- 鉴权三件齐备：页集已授权 + 该页集含 `finance.read` + 请求头 `X-ERP-Staff`。
-  缺页集 → `PAGESET_FORBIDDEN`；缺 grant → `GRANT_REQUIRED`；缺身份头 → `AUTH_REQUIRED`。
+### 0.1 四道闸，顺序不能换
+
+一次财务请求要过四道，**顺序**是判定的一部分：
+
+| 顺序 | 判什么 | 失败码 | 为什么这个顺序 |
+|---|---|---|---|
+| 1 | 租户头 `X-ERP-Tenant` | `TENANT_DENIED` | 一进程一租户，最外层 |
+| 2 | 页集 `supply-chain.fi` 已授权 | `PAGESET_FORBIDDEN` | 未授权时连「有没有配名单」都不该泄露 |
+| 3 | 该端点 grant 在册 | `GRANT_REQUIRED` | 部署层面的事实先答（先部署、后人员） |
+| 4 | 调用者在 `ERP_FINANCE_STAFF` 对应档 | `STAFF_NOT_AUTHORIZED` | 见 0.2 |
+
+缺身份头 `X-ERP-Staff` → `AUTH_REQUIRED`（第 4 道之前判）。
+
+### 0.2 第 4 道：财务后台按人授权（change: add-fi-staff-authorization）
+
+**为什么必须有这一道**：第 2/3 道判的是**部署**（这个部署允许哪些 grant），
+`PagesetAuth` 是一份静态配置，**它不认识调用者**；而 fi 面没有任何数据范围
+（财务就是看全公司的账）。少了第 4 道，「把 `supply-chain.fi` 写进授权配置」就等于
+把财务后台发给**所有已登录用户**，而 `X-ERP-Staff` 留痕还会让他们看起来像有授权的经办人。
+
+对外四个页集没有这个问题的原因：它们的身份头会**改变能看到的数据**
+（`x-erp-customer` 决定只看自己那几单），越权由车间的 `DATA_SCOPE_DENIED` 兜住。
+
+配置（部署侧，带外 Secret 注入）：
+
+```
+ERP_FINANCE_STAFF={"read":["cfo@example.com"],"write":["cfo@example.com","clerk@example.com"],"confirm":["cfo@example.com"]}
+ERP_FINANCE_STAFF_FILE=   # 或给文件路径；内联优先
+```
+
+- 键可写全名（`finance.read`）或短名（`read`），两者等价。
+- 值是人员标识，与网关注入的 `x-erp-staff` **逐字比较**（去空白、大小写不敏感）。
+- **单调闭包**：`confirm` 名单里的人自动具备 `write` 与 `read`；`write` 自动具备 `read`。
+  更强的档不需要重复登记——「CFO 能确认但不许看报表」是配置陷阱，不是我们要的语义。
+- **fail-closed**：未配置 / 不可解析 / 名单为空 ⇒ **没有人**能进（不是所有人）。
+- **程序身份不靠名单放行**：`system` / `agent` / `asset-engine` / `billing-engine` /
+  `posting-engine` / `bad-debt-engine` 在 REST 面一律 `INVALID_ARGUMENT`（须人工经办），
+  即使有人把它们写进名单也不放行。要接自动化月结，得先有服务账号机制（独立凭据 + 独立审计），
+  而不是把引擎名混进人的名单。
+
+网关侧的前提（`paas/server/routes/erp-proxy.js`）：无会话 → 401；客户端送来的一切
+`X-ERP-*` 一律剥离；`x-erp-staff` 由会话邮箱/绑定表**重新注入**——所以这个头伪造不了，
+它才敢被当作授权依据。
+
+### 0.3 其它
+
 - **租户头 `X-ERP-Tenant` 是常量，不是凭据**，不能单独放行——只凭它开财报等于裸奔。
 - 页集 `supply-chain.fi` 是**内部页集**（`pagesets.INTERNAL_PAGESET_KEYS`）：
   服务端能授权、能守门、能审计，但**不出现在 `GET /pagesets` 载荷**里。
   理由：客户端 `KNOWN_KEYS` 硬编码四个 key，遇到未知 key 会整包作废，连带打掉四个业务页集。
-- fail-closed：未配置 `supply-chain.fi` 授权时四个端点一律 403。启用是配置变更
-  （`ERP_PAGESET_AUTH_JSON` 加 `"supply-chain.fi": ["finance.read"]`），不是代码变更。
+- fail-closed 双向：未配置 `supply-chain.fi` 授权、或未配置 `ERP_FINANCE_STAFF`，
+  端点一律 403。启用是**配置变更**（两处都要配齐），不是代码变更。
 - 参数：`period` 为 `YYYY-MM`；响应为统一壳 `{"ok": true, "data": ..., "rows_returned": 0}`。
 
 ## 1. 法定报表（capability `erp-cn-localization`）

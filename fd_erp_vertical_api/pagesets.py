@@ -146,3 +146,110 @@ def require_grant(auth: PagesetAuth, pageset_key: str, grant: str) -> frozenset[
                        f"当前账号缺少所需权限码：{grant}",
                        detail={"pageset_key": pageset_key, "grant": grant})
     return grants
+
+
+# ---- 财务后台的人员授权（change: add-fi-staff-authorization）----
+#
+# 为什么需要这一层：`require_grant` 判的是**部署**（这个页面集允许哪些 grant），
+# 它不认识调用者。fi 面又没有任何数据范围（财务就是看全公司的账），所以
+# 「谁能碰财务」没有第二道闸——补上 `supply-chain.fi` 的授权等于把财务后台
+# 发给所有已登录用户，而留痕标签会让他们看起来像是有授权的经办人。
+
+#: 财务授权三档，强度递增（更强的档包含更弱的档）。
+FINANCE_GRANT_TIERS: tuple[str, ...] = (
+    "finance.read", "finance.write", "finance.confirm",
+)
+
+#: 程序身份：REST 面上不得代表财务操作。与各车道的 `PROGRAM_ACTORS` 同一组名字。
+#: 这一条**不靠名单放行**：名单是「哪些人」，程序不是人；将来要接自动化月结，
+#: 得先有服务账号机制（有独立的凭据与审计），而不是把 `asset-engine` 写进人的名单。
+#: 取各车道 `PROGRAM_ACTORS` 的并集——两处口径必须一致，否则「谁是程序」在 REST 层与
+#: 车道层各有一份答案（`asset-engine` 设门槛会在车道被拒、在 REST 层却放行）。
+PROGRAM_IDENTITIES: frozenset[str] = frozenset({
+    "system", "agent",
+    "asset-engine", "billing-engine", "posting-engine", "bad-debt-engine",
+})
+
+#: 配置里可用的短键（`{"read": [...]}`）到全名的映射。
+_FINANCE_TIER_ALIASES: dict[str, str] = {
+    "read": "finance.read", "write": "finance.write", "confirm": "finance.confirm",
+}
+
+
+@dataclass(frozen=True)
+class FinanceStaff:
+    """谁能碰财务后台：grant 档 → 允许的人员标识集。
+
+    空表 = 没有人（fail-closed）。「没配置」与「全都行」是两件事，这里只认前者。
+    """
+
+    by_grant: dict[str, frozenset[str]]
+
+    @property
+    def configured(self) -> bool:
+        return any(self.by_grant.get(t) for t in FINANCE_GRANT_TIERS)
+
+    def allows(self, grant: str, who: str) -> bool:
+        """该人员是否可做 `grant` 这一档（单调闭合：更强的档也放行更弱的）。"""
+        person = str(who or "").strip().lower()
+        if not person or grant not in FINANCE_GRANT_TIERS:
+            return False
+        start = FINANCE_GRANT_TIERS.index(grant)
+        return any(person in self.by_grant.get(tier, frozenset())
+                   for tier in FINANCE_GRANT_TIERS[start:])
+
+
+def _normalize_finance_staff(raw: Any) -> FinanceStaff:
+    """配置 → FinanceStaff：只认三档、只认非空字符串，其余丢弃（不猜）。"""
+    out: dict[str, frozenset[str]] = {}
+    if not isinstance(raw, dict):
+        return FinanceStaff({})
+    for key, people in raw.items():
+        tier = _FINANCE_TIER_ALIASES.get(str(key).strip().lower(),
+                                         str(key).strip().lower())
+        if tier not in FINANCE_GRANT_TIERS or not isinstance(people, list):
+            continue
+        out[tier] = frozenset(
+            str(p).strip().lower() for p in people
+            if isinstance(p, str) and str(p).strip())
+    return FinanceStaff(out)
+
+
+def load_finance_staff(*, inline_json: str | None = None,
+                       file_path: str | None = None) -> FinanceStaff:
+    """加载财务任职名单（fail-closed：缺失/损坏 → 空名单，没有人通过）。"""
+    payload: Any = None
+    if inline_json:
+        try:
+            payload = json.loads(inline_json)
+        except json.JSONDecodeError:
+            return FinanceStaff({})
+    elif file_path:
+        try:
+            with open(file_path, encoding="utf-8") as fh:
+                payload = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return FinanceStaff({})
+    return _normalize_finance_staff(payload)
+
+
+def require_finance_staff(staff: FinanceStaff, grant: str, who: str) -> None:
+    """人员闸：不在名单 → `STAFF_NOT_AUTHORIZED`。
+
+    拒绝消息分两种，因为处置方向不同：整体没配置要去部署侧登记，
+    个人不在名单要找管理员加名字。
+    """
+    if staff.allows(grant, who):
+        return
+    if not staff.configured:
+        raise ApiError(
+            "STAFF_NOT_AUTHORIZED",
+            "财务后台未配置任职名单（ERP_FINANCE_STAFF）——对所有人关闭",
+            detail={"grant": grant, "configured": False,
+                    "fix": "部署侧设置 ERP_FINANCE_STAFF="
+                           '{"read":["..."],"write":["..."],"confirm":["..."]}'})
+    raise ApiError(
+        "STAFF_NOT_AUTHORIZED",
+        f"{str(who or '（空）').strip() or '（空）'} 不在财务 {grant} 名单内",
+        detail={"grant": grant, "configured": True,
+                "fix": f"由管理员把该人员加入 ERP_FINANCE_STAFF.{grant}"})

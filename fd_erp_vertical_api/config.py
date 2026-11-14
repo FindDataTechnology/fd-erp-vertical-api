@@ -8,6 +8,9 @@
 - ERP_KERNEL_URL           transport=mcp 时的内核 MCP 工具面地址
 - ERP_PAGESET_AUTH         页面集授权配置（内联 JSON），优先于文件
 - ERP_PAGESET_AUTH_FILE    页面集授权配置 JSON 文件路径（fail-closed）
+- ERP_FINANCE_STAFF        财务后台任职名单（内联 JSON），优先于文件；
+                           缺失/不可解析/名单为空 ⇒ 没有人能进财务后台
+- ERP_FINANCE_STAFF_FILE   财务任职名单 JSON 文件路径
 - ERP_WMS_SNAPSHOT_FILE    WMS 库存快照 JSON 文件路径（缺省无快照源，如实降级）
 - ERP_CN_CHART             中国国别包所依据的准则文件名（accounts-small.json 缺省 /
                            accounts-large.json）；非法值装配即拒，不静默退回
@@ -51,6 +54,8 @@ class Settings:
     kernel_url: str | None = field(default=None, repr=False)
     pageset_auth_json: str | None = field(default=None, repr=False)
     pageset_auth_file: str | None = field(default=None, repr=False)
+    finance_staff_json: str | None = field(default=None, repr=False)
+    finance_staff_file: str | None = field(default=None, repr=False)
     wms_snapshot_file: str | None = None
     #: 信用占用失效时点上限（天），与内核同口径（change: close-orphan-credit-reservations）。
     #: 内核缺该字段时自己回退到同一默认值；这里显式声明是为了让部署侧可配。
@@ -73,6 +78,8 @@ class Settings:
             kernel_url=_env("ERP_KERNEL_URL"),
             pageset_auth_json=_env("ERP_PAGESET_AUTH"),
             pageset_auth_file=_env("ERP_PAGESET_AUTH_FILE"),
+            finance_staff_json=_env("ERP_FINANCE_STAFF"),
+            finance_staff_file=_env("ERP_FINANCE_STAFF_FILE"),
             wms_snapshot_file=_env("ERP_WMS_SNAPSHOT_FILE"),
             credit_reservation_max_days=_int_env("ERP_CREDIT_RESERVATION_MAX_DAYS", 90),
             cn_chart=_env("ERP_CN_CHART", "accounts-small.json")

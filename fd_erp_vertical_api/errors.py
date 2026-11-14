@@ -10,6 +10,7 @@
                      测试/演示以身份头承载，见 README）
 - PAGESET_FORBIDDEN  租户未授权所请求页面集（fail-closed：不可见即拒绝）
 - GRANT_REQUIRED     页面集已授权但缺该端点所需 grant
+- STAFF_NOT_AUTHORIZED 财务后台按人授权：调用者不在 ERP_FINANCE_STAFF 名单内
 - NOT_IMPLEMENTED    契约端点存在、后端能力未就绪（如实 501，禁止假实现）
 """
 from __future__ import annotations
@@ -122,6 +123,10 @@ ERROR_CATALOG: dict[str, ErrorCodeMeta] = {
     "DATA_SCOPE_DENIED": ErrorCodeMeta(
         "DATA_SCOPE_DENIED", "invalid_argument", False,
         "越权操作非名下/非本域数据（业务员-客户归属、代理身份越权校验失败）。",
+        403),
+    "STAFF_NOT_AUTHORIZED": ErrorCodeMeta(
+        "STAFF_NOT_AUTHORIZED", "invalid_argument", False,
+        "调用者不在财务任职名单内（或名单未配置）——财务后台按人授权，需管理员登记。",
         403),
 }
 

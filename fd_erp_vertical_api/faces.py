@@ -40,7 +40,9 @@ from .drivers import Drivers, stock_on_hand
 from .envelope import list_shell, ok_shell, parse_page_params
 from .errors import ApiError, invoice_degraded
 from .errors import ApiError
-from .pagesets import PagesetAuth, require_grant
+from .pagesets import (PROGRAM_IDENTITIES, FinanceStaff, PagesetAuth,
+                       load_finance_staff, require_finance_staff,
+                       require_grant)
 
 PAGESET_SE = "supply-chain.se"
 PAGESET_SP = "supply-chain.sp"
@@ -1331,29 +1333,51 @@ def register_cp_face(app, settings, d: Drivers, kernel,
 
 # ---- FI 财务后台（内部页集 supply-chain.fi：不进 /pagesets 载荷）----
 
-def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth) -> None:
-    """财务后台四个只读报表端点。
+def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth,
+                     staff: FinanceStaff | None = None) -> None:
+    """财务后台（48 个端点）。
 
     为什么是与四个业务页集**并列的一面**，而不是它们的子集：公司自己的资产负债表 /
     利润表 / 现金流量表不属于任何供应链外部角色。放进客户订货小程序既是放错位置，
     也是一处暴露面——而对外页集 key 由客户端硬编码校验，多吐一个会整包作废。
     所以这里是 `INTERNAL_PAGESET_KEYS`：服务端能授权、能守门、能审计，载荷里不出现。
 
-    四个端点都是**投影**：不写账、不建表、不缓存，直接调 `CnStatements`。
-    报表自己的对照列（年初数 / 上年同期 / 本年累计）与自证字段随之一起返回，
-    不在这一层重算任何数——重算就是第二份口径。
+    三道闸的顺序**不能换**：先页面集（这个部署允不允许财务面，未授权时连「有没有名单」
+    都不该泄露）→ 再 grant（这个端点要哪一档）→ 最后按人（`ERP_FINANCE_STAFF`）。
+
+    第三道是 2026-11-14 补的（change: add-fi-staff-authorization）。为什么必须有它：
+    `require_grant` 判的是**部署**，不认识调用者；而 fi 面没有任何数据范围（财务就是看
+    全公司的账），所以少了这一道，「把 supply-chain.fi 写进授权配置」就等于把财务后台
+    发给所有已登录用户——留痕标签还会让他们看起来像有授权的经办人。
+
+    端点本身都是**投影**：不写账、不建表、不缓存，直接调各车道。
+    报表自己的对照列与自证字段随之一起返回，不在这一层重算任何数——重算就是第二份口径。
     """
+    policy = staff or load_finance_staff(
+        inline_json=getattr(settings, "finance_staff_json", None),
+        file_path=getattr(settings, "finance_staff_file", None))
+
     def fi_route(grant: str):
         def _dep(request: Request) -> dict[str, Any]:
             request.state.erp_grant = grant
             require_grant(auth, PAGESET_FI, grant)
-            staff = request.headers.get(STAFF_HEADER, "").strip()
-            if not staff:
+            who = request.headers.get(STAFF_HEADER, "").strip()
+            if not who:
                 raise ApiError(
                     "AUTH_REQUIRED",
                     f"缺少财务身份头 {STAFF_HEADER}"
                     "（FI 身份=财务员工号；租户头是常量，不能单独当凭据）")
-            return {"staff": staff}
+            # 程序身份先拒（不靠名单）：这是「机器不得代表财务」那条纪律的服务面实现，
+            # 也让归档规格里「机器不得关账 → 参数错误」继续成立（而不是被名单的 403 顶掉）。
+            if who.lower() in PROGRAM_IDENTITIES:
+                raise ApiError(
+                    "INVALID_ARGUMENT",
+                    f"须人工经办：{who} 不得代表财务操作"
+                    "（REST 面只接人工；自动化需服务账号机制，不复用人的名单）",
+                    detail={"provided": who,
+                            "program_identities": sorted(PROGRAM_IDENTITIES)})
+            require_finance_staff(policy, grant, who)
+            return {"staff": who}
         return _dep
 
     def _period(request: Request) -> Any:
@@ -1467,7 +1491,7 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth) -> None:
     def _human(role: str) -> str:
         """拍板/认证的经办人：取财务身份头，机器不得自证。"""
         who = role.strip()
-        if not who or who in ("system", "agent"):
+        if not who or who.lower() in PROGRAM_IDENTITIES:
             raise ApiError(
                 "INVALID_ARGUMENT",
                 f"须人工拍板：{who or '（空）'} 不得代替人确认提案"

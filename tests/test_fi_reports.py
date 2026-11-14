@@ -17,6 +17,11 @@ from decimal import Decimal
 
 import pytest
 
+#: 财务任职名单：第四道闸（按人授权）要用它，否则 fi 端点一律 403。
+STAFF_ROSTER = json.dumps({"read": ["cfo@example"],
+                            "write": ["cfo@example"],
+                            "confirm": ["cfo@example"]})
+
 from fd_erp_vertical_api.pagesets import (INTERNAL_PAGESET_KEYS, PUBLISHED_PAGESET_KEYS,
                                           load_pageset_auth)
 
@@ -44,7 +49,8 @@ def _app(tmp_path, dsn, grants):
     payload = json.dumps(grants)
     settings = Settings(tenant_id="tnt-demo", database_url=dsn,
                         base_currency="CNY", data_dir=str(tmp_path / "data"),
-                        pageset_auth_json=payload)
+                        pageset_auth_json=payload,
+                        finance_staff_json=STAFF_ROSTER)
     from fd_erp_vertical_api.kernel_client import InProcessKernelClient
     kernel = InProcessKernelClient(settings)
     app = create_app(settings, kernel,

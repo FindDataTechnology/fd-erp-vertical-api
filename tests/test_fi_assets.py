@@ -20,6 +20,11 @@ from decimal import Decimal
 
 import pytest
 
+#: 财务任职名单：第四道闸（按人授权）要用它，否则 fi 端点一律 403。
+STAFF_ROSTER = json.dumps({"read": ["cfo@example"],
+                            "write": ["cfo@example"],
+                            "confirm": ["cfo@example"]})
+
 from fd_erp_vertical_api.pagesets import load_pageset_auth
 
 FI_RO = {"supply-chain.fi": ["finance.read"]}
@@ -44,7 +49,8 @@ def _app(tmp_path, dsn, grants):
     payload = json.dumps(grants)
     settings = Settings(tenant_id="tnt-demo", database_url=dsn,
                         base_currency="CNY", data_dir=str(tmp_path / "data"),
-                        pageset_auth_json=payload)
+                        pageset_auth_json=payload,
+                        finance_staff_json=STAFF_ROSTER)
     kernel = InProcessKernelClient(settings)
     app = create_app(settings, kernel,
                      pageset_auth=load_pageset_auth(inline_json=payload),
@@ -164,11 +170,16 @@ def test_threshold_must_be_given_explicitly_and_can_be_cleared(rw):
 
 
 def test_program_identity_cannot_set_the_threshold(rw):
+    """引擎身份在 REST 层就被拒（比车道的「人工登记」更早一道）。
+
+    车道自己的那一层判据在 `fd-erp-vertical-templates/tests/test_assets_lane.py`
+    直接证；这里证的是「通过 API 也做不到」，且门槛未落下。
+    """
     res = rw.post(f"{BASE}/assets/threshold",
                   headers={**TENANT_HEADER, "X-ERP-Staff": "asset-engine"},
                   json={"amount": "5000"})
     assert res.status_code == 400
-    assert "人工登记" in res.json()["error"]["message"]
+    assert "人工" in res.json()["error"]["message"]
     assert rw.get(f"{BASE}/assets/summary", headers=H).json()["data"]["threshold"] is None
 
 

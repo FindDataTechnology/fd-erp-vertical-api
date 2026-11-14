@@ -36,8 +36,21 @@ fd-erp-vertical-api check   # 自检：授权配置 + 错误码封闭集（不�
 `ERP_API_DATA_DIR`（模板层 JSONL 事件档目录）、`ERP_KERNEL_TRANSPORT`
 （`inprocess` 缺省 / `mcp`）、`ERP_KERNEL_URL`（mcp 形态）、
 `ERP_PAGESET_AUTH`（内联 JSON）或 `ERP_PAGESET_AUTH_FILE`（文件）、
+**`ERP_FINANCE_STAFF`（财务后台任职名单，内联 JSON）或 `ERP_FINANCE_STAFF_FILE`**、
 `ERP_WMS_SNAPSHOT_FILE`（WMS 快照 JSON，缺省无快照源如实降级）、
 `ERP_ACCESS_LOG`（访问日志档位，见下节）。
+
+**财务后台要两处都配齐才通**（缺任一处一律 403，fail-closed）：
+
+```
+ERP_PAGESET_AUTH     += "supply-chain.fi": ["finance.read","finance.write","finance.confirm"]
+ERP_FINANCE_STAFF     = {"read":["cfo@example.com"],"write":["cfo@example.com"],"confirm":["cfo@example.com"]}
+```
+
+只配第一处是**危险的**：页集授权判的是「这个部署允许哪些 grant」，它不认识调用者，
+而 fi 面没有任何数据范围——那样等于把财务后台发给所有已登录用户。详见
+`INTERNAL-API.md` §0（四道闸与单调闭包：`confirm` ⊇ `write` ⊇ `read`）。
+程序身份（`system`/`agent`/各 `*-engine`）在 REST 面一律拒，**不靠名单放行**。
 
 ## 访问日志（被拒的请求可归因）
 
@@ -78,7 +91,8 @@ sha256（跨租户被拒时记的是请求方声称那个租户的哈希）；`d
 - grant 码封闭集（`pagesets.KNOWN_GRANTS`）= paas registry 四页面集
   requiredGrants 并集；集外码一律丢弃 —— 绝不输出会让客户端整体作废的形态；
 - 端点闸序：租户闸 → 页面集授权（`PAGESET_FORBIDDEN`）→ grant
-  （`GRANT_REQUIRED`）→ 客户身份域（404）。
+  （`GRANT_REQUIRED`）→ 客户身份域（404）；内部页集 `supply-chain.fi` 在同一条链上
+  多一道**按人授权**（`STAFF_NOT_AUTHORIZED`，见 `INTERNAL-API.md` §0.2）。
 
 ## 端点覆盖（契约 19 条）
 
