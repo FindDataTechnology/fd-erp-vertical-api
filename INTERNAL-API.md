@@ -65,6 +65,12 @@ ERP_FINANCE_STAFF_FILE=   # 或给文件路径；内联优先
 
 ### 0.4 其它
 
+- **表格第 6 列 `响应字段` 是闸读的，不是给人读的。** 它是该端点响应的**顶层 JSON 键名**
+  （列表端点按**行**算），由 `tests/test_internal_api_field_promise.py` 在真库富种子下逐条打真
+  端点核对；`MAY_BE_ABSENT` 表里登记的是「存在取决于状态」的键（带理由）。**改这一列等于改承诺**：
+  删一个字段要有理由（那道闸会先拦住减承诺），加一个字段必须真返回。
+  写操作（POST）行留 `—`——它们的响应形状由状态机决定（`preview`/`duplicate`/`deferred` 各不相同），
+  **没校验的东西不写成承诺**。
 - **租户头 `X-ERP-Tenant` 是常量，不是凭据**，不能单独放行——只凭它开财报等于裸奔。
 - 页集 `supply-chain.fi` 是**内部页集**（`pagesets.INTERNAL_PAGESET_KEYS`）：
   服务端能授权、能守门、能审计，但**不出现在 `GET /pagesets` 载荷**里。
@@ -75,12 +81,12 @@ ERP_FINANCE_STAFF_FILE=   # 或给文件路径；内联优先
 
 ## 1. 法定报表（capability `erp-cn-localization`）
 
-| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
-|---|---|---|---|---|
-| GET | `/erp/supply-chain/v1/fi/reports/balance-sheet` | `period` | 期末三表区 + `opening`（年初数，含 `asOf`）+ `totals` + `balanced` + `complete` + `unmapped` | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/reports/income-statement` | `period` | `lines` + `totals`（本期）+ `priorYear`（同月去年，回显 `period`）+ `cumulative`（本年 1 月 1 日起） | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/reports/cash-flow` | `period` | 直接法三类 + `netIncrease` + 期初期末现金 + 自证 `sumCheck`/`balanceCheck` + `priorYear` + `cumulative` | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/reports/vat-return` | `period` | `ledger`（账面口径）与 `declared`（申报口径）；未提供申报数时明说「不能当作已核对」 | `finance.read` |
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 响应字段 |
+|---|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/reports/balance-sheet` | `period` | 期末三表区 + `opening`（年初数，含 `asOf`）+ `totals` + `balanced` + `complete` + `unmapped` | `finance.read` | period, assets, liabilities, equity, totals, balanced, complete, unmapped, opening |
+| GET | `/erp/supply-chain/v1/fi/reports/income-statement` | `period` | `lines` + `totals`（本期）+ `priorYear`（同月去年，回显 `period`）+ `cumulative`（本年 1 月 1 日起） | `finance.read` | period, lines, totals, priorYear, cumulative, complete, unmapped |
+| GET | `/erp/supply-chain/v1/fi/reports/cash-flow` | `period` | 直接法三类 + `netIncrease` + 期初期末现金 + 自证 `sumCheck`/`balanceCheck` + `priorYear` + `cumulative` | `finance.read` | period, categories, netIncrease, openingCash, closingCash, sumCheck, balanceCheck, consistent, priorYear, cumulative |
+| GET | `/erp/supply-chain/v1/fi/reports/vat-return` | `period` | `ledger`（账面口径）与 `declared`（申报口径）；未提供申报数时明说「不能当作已核对」 | `finance.read` | period, ledger, declared, declaredSource, provided, consistent, reconciliation, warning |
 
 ## 2. 报表自带的判据（本层不重算）
 
@@ -96,12 +102,12 @@ ERP_FINANCE_STAFF_FILE=   # 或给文件路径；内联优先
 
 ## 1b. 申报动作（读与写分档）
 
-| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
-|---|---|---|---|---|
-| GET | `/erp/supply-chain/v1/fi/reports/surcharges` | `period` | 附加税预演：`base`（应纳增值税）、三项 `items`、`total`、`proposed=false`（只算不写） | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/reports/income-tax-prepay` | `period` | 所得税预缴预演：`cumulativeProfit`、`target`、`alreadyPrepaid`、`due`、`proposed=false` | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/reports/filing-summary` | `period` | 增值税 + 三项附加税 + 所得税预缴一张表，并与账面 5403 / 5801 逐项对比 | `finance.read` |
-| POST | `/erp/supply-chain/v1/fi/filings/vat-return` | JSON：`period`、`source`（必填）、`sales`/`outputVat`/`inputVat`/`inputTransferOut`/`openingCredit` | 登记结果：`declared`、`source`；同期间后一次为准 | `finance.write` |
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 响应字段 |
+|---|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/reports/surcharges` | `period` | 附加税预演：`base`（应纳增值税）、三项 `items`、`total`、`proposed=false`（只算不写） | `finance.read` | period, base, items, total, relief, proposed, preview, noop |
+| GET | `/erp/supply-chain/v1/fi/reports/income-tax-prepay` | `period` | 所得税预缴预演：`cumulativeProfit`、`target`、`alreadyPrepaid`、`due`、`proposed=false` | `finance.read` | period, cumulativeProfit, target, alreadyPrepaid, due, rate, proposed, preview, noop |
+| GET | `/erp/supply-chain/v1/fi/reports/filing-summary` | `period` | 增值税 + 三项附加税 + 所得税预缴一张表，并与账面 5403 / 5801 逐项对比 | `finance.read` | period, vat, surcharges, incomeTax, rates, ratesEffectiveFrom, reconciliation, consistent |
+| POST | `/erp/supply-chain/v1/fi/filings/vat-return` | JSON：`period`、`source`（必填）、`sales`/`outputVat`/`inputVat`/`inputTransferOut`/`openingCredit` | 登记结果：`declared`、`source`；同期间后一次为准 | `finance.write` | — |
 
 **读与写必须分档**：`finance.read` 能看预演与汇总，但 MUST NOT 能改申报数；
 登记端点要求 `finance.write`，只有读权限调用 MUST 被拒（`GRANT_REQUIRED`）。
@@ -111,15 +117,15 @@ ERP_FINANCE_STAFF_FILE=   # 或给文件路径；内联优先
 
 ## 1c. 发票台账（录入与查询）
 
-| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
-|---|---|---|---|---|
-| GET | `/erp/supply-chain/v1/fi/invoices` | `direction`（可选 sale/purchase） | 票据列表（含 `tier`、认证状态、`redOf`） | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/invoices/{number}` | — | 单票详情；不存在 → `NOT_FOUND` | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/invoices/deduction` | `period` | 进项三档（可抵 / 待认证 / 不可抵，税额合计 + 逐票） | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/invoices/reconciliation` | `period` | 账上 `2221.01.02` 借方发生额 vs 台账可抵税额，差额与提示 | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/reports/invoice-summary` | `period` | 台账口径的期间汇总 | `finance.read` |
-| POST | `/erp/supply-chain/v1/fi/invoices` | JSON：`direction`、`kind`、`number`、`net`、`rate`/`tax`、`issuedOn` | 登记结果；票种不在封闭集或税额与「金额 × 税率」不符即拒 | `finance.write` |
-| POST | `/erp/supply-chain/v1/fi/invoices/{number}/certify` | JSON 可选：`certifiedOn` | 认证结果；经办人取财务身份头，**system/agent 一律拒** | `finance.write` |
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 响应字段 |
+|---|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/invoices` | `direction`（可选 sale/purchase） | 票据列表（含 `tier`、认证状态、`redOf`） | `finance.read` | number, direction, kind, kindZh, net, tax, gross, rate, issuedOn, period, certified, red, redOf, redReason, certifiedBy, certifiedOn, submittedBy |
+| GET | `/erp/supply-chain/v1/fi/invoices/{number}` | — | 单票详情；不存在 → `NOT_FOUND` | `finance.read` | number, direction, kind, kindZh, net, tax, gross, rate, issuedOn, period, certified, red, redOf, redReason, counterparty, submittedBy |
+| GET | `/erp/supply-chain/v1/fi/invoices/deduction` | `period` | 进项三档（可抵 / 待认证 / 不可抵，税额合计 + 逐票） | `finance.read` | period, tiers, totalTax |
+| GET | `/erp/supply-chain/v1/fi/invoices/reconciliation` | `period` | 账上 `2221.01.02` 借方发生额 vs 台账可抵税额，差额与提示 | `finance.read` | period, invoiceInputVat, ledgerInputVat, difference, consistent |
+| GET | `/erp/supply-chain/v1/fi/reports/invoice-summary` | `period` | 台账口径的期间汇总 | `finance.read` | period, inputDeduction, redLetters, salesByRateAndKind |
+| POST | `/erp/supply-chain/v1/fi/invoices` | JSON：`direction`、`kind`、`number`、`net`、`rate`/`tax`、`issuedOn` | 登记结果；票种不在封闭集或税额与「金额 × 税率」不符即拒 | `finance.write` | — |
+| POST | `/erp/supply-chain/v1/fi/invoices/{number}/certify` | JSON 可选：`certifiedOn` | 认证结果；经办人取财务身份头，**system/agent 一律拒** | `finance.write` | — |
 
 **抵扣判断不在这一层**：某张票属于可抵 / 待认证 / 不可抵由台账决定（票种 + 认证共同决定）。
 端点只做投影与录入——在这一层再写一遍判断就是第二份口径。
@@ -131,15 +137,15 @@ ERP_FINANCE_STAFF_FILE=   # 或给文件路径；内联优先
 
 ## 1d. 提案收件箱与拍板（确认门缺的那一侧）
 
-| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
-|---|---|---|---|---|
-| GET | `/erp/supply-chain/v1/fi/proposals` | `status`（可选 pending/confirmed/rejected） | 提案列表（含 id、kind、lane_title、stable_id、状态、提交人） | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/proposals/{id}` | — | 单条提案（含分录行）；不存在 → `NOT_FOUND` | `finance.read` |
-| POST | `/erp/supply-chain/v1/fi/proposals/{id}/confirm` | — | 确认结果；`confirmed_by` 取 `X-ERP-Staff` | `finance.confirm` |
-| POST | `/erp/supply-chain/v1/fi/proposals/{id}/reject` | JSON：`reason`（**必填**） | 退回结果；不带理由即拒 | `finance.confirm` |
-| POST | `/erp/supply-chain/v1/fi/invoices/red` | JSON：`direction`、`kind`、`number`、`net`、`redOf`（必填）、`reason`、`issuedOn` | 红字票（负数金额，原票不动）；票种与税率由原票决定，不收 `rate`/`tax` | `finance.write` |
-| POST | `/erp/supply-chain/v1/fi/invoices/{number}/post` | JSON：`ref`、`amount`、`costAccount`、`settleAccount`、`gross`、`bookedOn` | 待确认提案（**不直接写分录**） | `finance.write` |
-| POST | `/erp/supply-chain/v1/fi/invoices/{number}/post-red` | JSON：`ref`、`amount`、`revenueAccount`、`settleAccount`、`bookedOn` | 待确认提案（与现销逐行反向） | `finance.write` |
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 响应字段 |
+|---|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/proposals` | `status`（可选 pending/confirmed/rejected） | 提案列表（含 id、kind、lane_title、stable_id、状态、提交人） | `finance.read` | id, kind, lane_title, stable_id, status, source_ref, booked_on, decided_by, dimensions |
+| GET | `/erp/supply-chain/v1/fi/proposals/{proposal_id}` | — | 单条提案（含分录行）；不存在 → `NOT_FOUND` | `finance.read` | id, kind, lane_title, lane_post, stable_id, status, source_ref, booked_on, decided_by, dimensions |
+| POST | `/erp/supply-chain/v1/fi/proposals/{proposal_id}/confirm` | — | 确认结果；`confirmed_by` 取 `X-ERP-Staff` | `finance.confirm` | — |
+| POST | `/erp/supply-chain/v1/fi/proposals/{proposal_id}/reject` | JSON：`reason`（**必填**） | 退回结果；不带理由即拒 | `finance.confirm` | — |
+| POST | `/erp/supply-chain/v1/fi/invoices/red` | JSON：`direction`、`kind`、`number`、`net`、`redOf`（必填）、`reason`、`issuedOn` | 红字票（负数金额，原票不动）；票种与税率由原票决定，不收 `rate`/`tax` | `finance.write` | — |
+| POST | `/erp/supply-chain/v1/fi/invoices/{number}/post` | JSON：`ref`、`amount`、`costAccount`、`settleAccount`、`gross`、`bookedOn` | 待确认提案（**不直接写分录**） | `finance.write` | — |
+| POST | `/erp/supply-chain/v1/fi/invoices/{number}/post-red` | JSON：`ref`、`amount`、`revenueAccount`、`settleAccount`、`bookedOn` | 待确认提案（与现销逐行反向） | `finance.write` | — |
 
 **权限三档互不覆盖**：`finance.read` 看提案；`finance.write` 登记票与过账（只提提案）；
 **`finance.confirm` 才能确认/退回**。「能登记一张票」与「能让这笔分录成为事实」是两件事，
@@ -154,17 +160,17 @@ ERP_FINANCE_STAFF_FILE=   # 或给文件路径；内联优先
 
 ## 1e. 月结三件（期间 / 期初 / 结转）
 
-| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
-|---|---|---|---|---|
-| GET | `/erp/supply-chain/v1/fi/periods` | — | 期间清单＝关账记录 ∪ **有分录的期间**：逐行 `closed`/`actor`/`hasEntries`/`vouchers`/`lines`/`lastBookedOn` | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/periods/{period}` | — | 单期间状态：是否关账、关账人/时间/备注 | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/periods/{period}/report` | — | 关账快照复算（封账那刻的数 vs 现在重算） | `finance.read` |
-| POST | `/erp/supply-chain/v1/fi/periods/{period}/close` | JSON 可选：`note` | 关账结果；`actor` 取 `X-ERP-Staff` | **`finance.confirm`** |
-| POST | `/erp/supply-chain/v1/fi/periods/{period}/reopen` | JSON：`reason`（**必填**） | 重开结果 | **`finance.confirm`** |
-| GET | `/erp/supply-chain/v1/fi/opening` | — | 建账期初的 `status` + `preview` | `finance.read` |
-| POST | `/erp/supply-chain/v1/fi/opening` | JSON：`lines`、`asOf`、`allowWithEntries`、`reason` | 待确认提案；只在空账可录 | `finance.write` |
-| GET | `/erp/supply-chain/v1/fi/reports/closing-preview` | `period` | 结哪些科目、净额、搬进权益多少（不写账） | `finance.read` |
-| POST | `/erp/supply-chain/v1/fi/closing/{period}/transfer` | — | 待确认提案；已关账期间拒绝穿入 | `finance.write` |
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 响应字段 |
+|---|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/periods` | — | 期间清单＝关账记录 ∪ **有分录的期间**：逐行 `closed`/`actor`/`hasEntries`/`vouchers`/`lines`/`lastBookedOn` | `finance.read` | period, closed, actor, hasEntries, vouchers, lines, lastBookedOn |
+| GET | `/erp/supply-chain/v1/fi/periods/{period}` | — | 单期间状态：是否关账、关账人/时间/备注 | `finance.read` | period, closed, actor, decidedAt, note, snapshot, schema |
+| GET | `/erp/supply-chain/v1/fi/periods/{period}/report` | — | 关账快照复算（封账那刻的数 vs 现在重算） | `finance.read` | period, closedAt, closedBy, bookTimezone, verified, snapshot, recomputed, diffs |
+| POST | `/erp/supply-chain/v1/fi/periods/{period}/close` | JSON 可选：`note` | 关账结果；`actor` 取 `X-ERP-Staff` | **`finance.confirm`** | — |
+| POST | `/erp/supply-chain/v1/fi/periods/{period}/reopen` | JSON：`reason`（**必填**） | 重开结果 | **`finance.confirm`** | — |
+| GET | `/erp/supply-chain/v1/fi/opening` | — | 建账期初的 `status` + `preview` | `finance.read` | status, preview |
+| POST | `/erp/supply-chain/v1/fi/opening` | JSON：`lines`、`asOf`、`allowWithEntries`、`reason` | 待确认提案；只在空账可录 | `finance.write` | — |
+| GET | `/erp/supply-chain/v1/fi/reports/closing-preview` | `period` | 结哪些科目、净额、搬进权益多少（不写账） | `finance.read` | period, balances, closingLines, netProfit, retainedAmount, retainedDirection, bookedOn, status |
+| POST | `/erp/supply-chain/v1/fi/closing/{period}/transfer` | — | 待确认提案；已关账期间拒绝穿入 | `finance.write` | — |
 
 **关账/重开用 `finance.confirm` 而不是 write**：关账会挡住该期间后续落账、重开会放开已封的期间，
 这是时间轴上的动作，与「登记一张票」不是同一类。顺序关账、只重开最近一期、快照复算
@@ -175,16 +181,16 @@ ERP_FINANCE_STAFF_FILE=   # 或给文件路径；内联优先
 
 ## 1f. 账龄与坏账准备（催收与期末减值）
 
-| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
-|---|---|---|---|---|
-| GET | `/erp/supply-chain/v1/fi/receivables/aging` | `asOf`、`dimension`（customer/supplier/…）、`buckets`（逗号分隔，如 `30,60,90`） | 按对象的账龄表 + `totals` + `totalOutstanding` + `advanceReceipt`（多收单列）+ `accountNetBalance` + `consistent`（不平带 `error`） | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/payables/aging` | 同上 | 同上（应付口径，多付为 `advancePayment`） | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/bad-debts/schedule` | — | 当前分档费率 + `registered`（未登记为 false） | `finance.read` |
-| POST | `/erp/supply-chain/v1/fi/bad-debts/schedule` | JSON：`bands`（`[{maxDays, rate}]`，最后一档 `maxDays` 留空） | 新版本号；`registeredBy` 取 `X-ERP-Staff`，**system/agent 一律拒** | `finance.write` |
-| GET | `/erp/supply-chain/v1/fi/bad-debts/status` | `asOf`（缺省今天） | `outstanding` / `allowance` / `netReceivable` / `coverage` / `bands` | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/reports/bad-debt-preview` | `period`、`asOf`（可选） | 预演：`target`/`existing`/`delta`/`rows` + `proposed=false`、`preview=true`、`blockers`（真计提会被什么挡住）、`canSubmit` | `finance.read` |
-| POST | `/erp/supply-chain/v1/fi/bad-debts/{period}/accrue` | — | 待确认提案（借 `6602` / 贷 `1231`；减少记反向）+ `proposed=true` + `stableId` | `finance.write` |
-| POST | `/erp/supply-chain/v1/fi/bad-debts/{period}/void` | JSON：`reason`（**必填**） | 作废结果；重提要换稳定键（`bad-debt:{period}#N`） | `finance.write` |
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 响应字段 |
+|---|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/receivables/aging` | `asOf`、`dimension`（customer/supplier/…）、`buckets`（逗号分隔，如 `30,60,90`） | 按对象的账龄表 + `totals` + `totalOutstanding` + `advanceReceipt`（多收单列）+ `accountNetBalance` + `consistent`（不平带 `error`） | `finance.read` | asOf, dimension, bucketLabels, rows, totals, totalOutstanding, accountNetBalance, consistent |
+| GET | `/erp/supply-chain/v1/fi/payables/aging` | 同上 | 同上（应付口径，多付为 `advancePayment`） | `finance.read` | asOf, dimension, bucketLabels, rows, totals, totalOutstanding, accountNetBalance, consistent |
+| GET | `/erp/supply-chain/v1/fi/bad-debts/schedule` | — | 当前分档费率 + `registered`（未登记为 false） | `finance.read` | bands, registered |
+| POST | `/erp/supply-chain/v1/fi/bad-debts/schedule` | JSON：`bands`（`[{maxDays, rate}]`，最后一档 `maxDays` 留空） | 新版本号；`registeredBy` 取 `X-ERP-Staff`，**system/agent 一律拒** | `finance.write` | — |
+| GET | `/erp/supply-chain/v1/fi/bad-debts/status` | `asOf`（缺省今天） | `outstanding` / `allowance` / `netReceivable` / `coverage` / `bands` | `finance.read` | asOf, outstanding, allowance, netReceivable, coverage, bands, method, consistent |
+| GET | `/erp/supply-chain/v1/fi/reports/bad-debt-preview` | `period`、`asOf`（可选） | 预演：`target`/`existing`/`delta`/`rows` + `proposed=false`、`preview=true`、`blockers`（真计提会被什么挡住）、`canSubmit` | `finance.read` | period, target, existing, delta, rows, proposed, preview, blockers, canSubmit, method, noop |
+| POST | `/erp/supply-chain/v1/fi/bad-debts/{period}/accrue` | — | 待确认提案（借 `6602` / 贷 `1231`；减少记反向）+ `proposed=true` + `stableId` | `finance.write` | — |
+| POST | `/erp/supply-chain/v1/fi/bad-debts/{period}/void` | JSON：`reason`（**必填**） | 作废结果；重提要换稳定键（`bad-debt:{period}#N`） | `finance.write` | — |
 
 **预演只算不写**：不生成提案、不落事件档。真计提会撞上的三件事（同期间已确认且金额不同＝跨期调整
 不允许／同期间待确认且金额不同须先作废／应计提额与账上准备一致＝noop）以 `blockers` 报出，
@@ -201,18 +207,18 @@ ERP_FINANCE_STAFF_FILE=   # 或给文件路径；内联优先
 
 ## 1g. 固定资产（台账 / 资本化门槛 / 月度折旧）
 
-| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
-|---|---|---|---|---|
-| GET | `/erp/supply-chain/v1/fi/assets` | — | 固定资产清单：原值 / 残值 / 累计折旧 / 净值 / 剩余月数 / 折旧方法及其出处 | `finance.read` |
-| POST | `/erp/supply-chain/v1/fi/assets` | JSON：`assetId`、`name`、`cost`、`acquiredOn`、`usefulLifeMonths`、`salvage`、`currency`、`category`、`expenseAccount`、`method`、`unitsTotal` | 登记结果；同标识幂等；低于资本化门槛即拒并指明应费用化（`treatment=expense`） | `finance.write` |
-| GET | `/erp/supply-chain/v1/fi/assets/summary` | — | 规模（项数 / 原值 / 累计折旧 / 净值）+ 资本化门槛 + 折旧方法与台账归属口径 | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/assets/{assetId}` | — | 单项资产；不存在 → `NOT_FOUND`（不返回零对象） | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/assets/{assetId}/plan` | — | 完整折旧计划：每期金额 / 累计 / 期末净值 + `booked` 已计提标记 | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/assets/{assetId}/book-value` | `asOf`（`YYYY-MM` 或 `YYYY-MM-DD`，可选） | 原值 / 累计折旧 / 净值 / `fullyDepreciated` | `finance.read` |
-| POST | `/erp/supply-chain/v1/fi/assets/threshold` | JSON：`amount`（**键必须出现**，`null`＝取消门槛）、`currency` | 门槛结果；`approvedBy` 取 `X-ERP-Staff`，**system/asset-engine 等程序身份一律拒** | `finance.write` |
-| GET | `/erp/supply-chain/v1/fi/reports/depreciation-preview` | `period` | 预演：逐资产计提额 + `total` + `proposed=false`、`preview=true`、`blockers`、`canSubmit` | `finance.read` |
-| POST | `/erp/supply-chain/v1/fi/assets/depreciation/{period}` | JSON 可选：`units`（工作量法资产当期产量，`{assetId: 数量}`） | 待确认提案（借费用 / 贷 `1602`）+ `proposed=true` + `stableId` | `finance.write` |
-| POST | `/erp/supply-chain/v1/fi/assets/depreciation/{period}/void` | JSON：`reason`（**必填**） | 作废结果；已过门落账的须先在内核冲正 | `finance.write` |
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 响应字段 |
+|---|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/assets` | — | 固定资产清单：原值 / 残值 / 累计折旧 / 净值 / 剩余月数 / 折旧方法及其出处 | `finance.read` | assetId, name, category, cost, salvage, accumulated, netBookValue, remainingMonths, method, methodSource, firstPeriod, status |
+| POST | `/erp/supply-chain/v1/fi/assets` | JSON：`assetId`、`name`、`cost`、`acquiredOn`、`usefulLifeMonths`、`salvage`、`currency`、`category`、`expenseAccount`、`method`、`unitsTotal` | 登记结果；同标识幂等；低于资本化门槛即拒并指明应费用化（`treatment=expense`） | `finance.write` | — |
+| GET | `/erp/supply-chain/v1/fi/assets/summary` | — | 规模（项数 / 原值 / 累计折旧 / 净值）+ 资本化门槛 + 折旧方法与台账归属口径 | `finance.read` | assetCount, totalCost, totalAccumulated, totalNetBookValue, threshold, policy |
+| GET | `/erp/supply-chain/v1/fi/assets/{asset_id}` | — | 单项资产；不存在 → `NOT_FOUND`（不返回零对象） | `finance.read` | assetId, name, category, cost, salvage, accumulated, netBookValue, remainingMonths, method, methodSource, firstPeriod, status |
+| GET | `/erp/supply-chain/v1/fi/assets/{asset_id}/plan` | — | 完整折旧计划：每期金额 / 累计 / 期末净值 + `booked` 已计提标记 | `finance.read` | assetId, method, periods, bookedAmount, policySource |
+| GET | `/erp/supply-chain/v1/fi/assets/{asset_id}/book-value` | `asOf`（`YYYY-MM` 或 `YYYY-MM-DD`，可选） | 原值 / 累计折旧 / 净值 / `fullyDepreciated` | `finance.read` | assetId, asOf, cost, accumulated, netBookValue, salvage, method, fullyDepreciated |
+| POST | `/erp/supply-chain/v1/fi/assets/threshold` | JSON：`amount`（**键必须出现**，`null`＝取消门槛）、`currency` | 门槛结果；`approvedBy` 取 `X-ERP-Staff`，**system/asset-engine 等程序身份一律拒** | `finance.write` | — |
+| GET | `/erp/supply-chain/v1/fi/reports/depreciation-preview` | `period` | 预演：逐资产计提额 + `total` + `proposed=false`、`preview=true`、`blockers`、`canSubmit` | `finance.read` | period, assets, total, proposed, preview, blockers, canSubmit, method |
+| POST | `/erp/supply-chain/v1/fi/assets/depreciation/{period}` | JSON 可选：`units`（工作量法资产当期产量，`{assetId: 数量}`） | 待确认提案（借费用 / 贷 `1602`）+ `proposed=true` + `stableId` | `finance.write` | — |
+| POST | `/erp/supply-chain/v1/fi/assets/depreciation/{period}/void` | JSON：`reason`（**必填**） | 作废结果；已过门落账的须先在内核冲正 | `finance.write` | — |
 
 **预演只算不写**：不生成提案、不落事件档。已计提过的期间照样可用——可提额如实为 0 并说明
 「这期不会再提」，而不是拿「已计提」把人挡在门外。
@@ -227,11 +233,11 @@ detail 里指明应费用化。`amount: null` 是**显式取消**门槛——`am
 
 ## 1h. 月结清单（一串有顺序的动作，不是 48 个按钮）
 
-| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
-|---|---|---|---|---|
-| GET | `/erp/supply-chain/v1/fi/month-end/{period}` | — | 逐项判据（`ok`/`blocker`/`warning`）+ 期间内待确认提案 + `nextOwners`（谁做下一步）+ `readyToRun` | `finance.read` |
-| POST | `/erp/supply-chain/v1/fi/month-end/{period}/run` | — | 顺序准备：结转成本 → 折旧 → 减值 → 结转损益；各步 `prepared`/`noop`/`deferred`/`failed` + `nextActions` | `finance.write` |
-| POST | `/erp/supply-chain/v1/fi/month-end/{period}/close` | — | 先跑再关账；前置不满足则 `closed=false` 并把原因写进 `nextActions` | **`finance.confirm`** |
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 响应字段 |
+|---|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/month-end/{period}` | — | 逐项判据（`ok`/`blocker`/`warning`）+ 期间内待确认提案 + `nextOwners`（谁做下一步）+ `readyToRun` | `finance.read` | period, precheck, pending, nextOwners, caliber_note |
+| POST | `/erp/supply-chain/v1/fi/month-end/{period}/run` | — | 顺序准备：结转成本 → 折旧 → 减值 → 结转损益；各步 `prepared`/`noop`/`deferred`/`failed` + `nextActions` | `finance.write` | — |
+| POST | `/erp/supply-chain/v1/fi/month-end/{period}/close` | — | 先跑再关账；前置不满足则 `closed=false` 并把原因写进 `nextActions` | **`finance.confirm`** | — |
 
 **为什么要有它**：漏跑一步没人会知道——漏折旧时账本一切正常（只是这期少一笔费用），
 漏结转时营业成本永远是 0，两个错在报表上都「看起来合理」，通常等跨期才发现。
@@ -249,13 +255,13 @@ detail 里指明应费用化。`amount: null` 是**显式取消**门槛——`am
 
 ## 1i. 三本账（账 → 凭证）
 
-| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
-|---|---|---|---|---|
-| GET | `/erp/supply-chain/v1/fi/books/balances` | `period` | 三栏式逐科目「期初 + 本期借 − 本期贷 = 期末」+ `totals` + `balanced` + 表外科目 `unclassified` | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/books/ledger/{accountCode}` | `period`（可选，缺省从建账起）、`limit`（只截显示行） | 逐笔流水 + 逐行 `balance` + `totals` + `closingBalance` + `truncated`/`rowCount` | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/books/journal` | `period`（可选）、`limit`（只截显示行） | 序时账：按凭证汇总（日期/`txnId`/来源/借合计/贷合计/行数/维度/`isClosing`）+ `totals` + `vouchers` | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/books/voucher/{txnId}` | — | 单张凭证的全部借贷行（科目/借/贷/维度）+ `totals` + `balanced` + `isClosing`；不存在 → `NOT_FOUND` | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/books/party-statement` | `dimension`、`value`（均必填）、`period`、`accounts`（逗号分隔，给了才对总账） | 跨科目小计 + 逐行余额 + `reconciliation`（本单 + 未标注 vs 总账）+ `consistent` | `finance.read` |
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 响应字段 |
+|---|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/books/balances` | `period` | 三栏式逐科目「期初 + 本期借 − 本期贷 = 期末」+ `totals` + `balanced` + 表外科目 `unclassified` | `finance.read` | period, rows, totals, balanced, unclassified |
+| GET | `/erp/supply-chain/v1/fi/books/ledger/{account_code}` | `period`（可选，缺省从建账起）、`limit`（只截显示行） | 逐笔流水 + 逐行 `balance` + `totals` + `closingBalance` + `truncated`/`rowCount` | `finance.read` | period, accountCode, opening, rows, totals, closingBalance, balanced, direction, truncated, rowCount |
+| GET | `/erp/supply-chain/v1/fi/books/journal` | `period`（可选）、`limit`（只截显示行） | 序时账：按凭证汇总（日期/`txnId`/来源/借合计/贷合计/行数/维度/`isClosing`）+ `totals` + `vouchers` | `finance.read` | period, rows, totals, vouchers, lines, balanced, truncated, rowCount |
+| GET | `/erp/supply-chain/v1/fi/books/voucher/{txn_id}` | — | 单张凭证的全部借贷行（科目/借/贷/维度）+ `totals` + `balanced` + `isClosing`；不存在 → `NOT_FOUND` | `finance.read` | txnId, sourceRef, lines, totals, balanced, isClosing, bookedOn, postedAt, stableId |
+| GET | `/erp/supply-chain/v1/fi/books/party-statement` | `dimension`、`value`（均必填）、`period`、`accounts`（逗号分隔，给了才对总账） | 跨科目小计 + 逐行余额 + `reconciliation`（本单 + 未标注 vs 总账）+ `consistent` | `finance.read` | period, dimension, dimensionValue, rows, subtotals, opening, closingBalance, direction, totals, balanced, reconciled, consistent, reconciliation |
 
 **三张表之外还要有账**：查一笔钱去哪了，靠的不是资产负债表，是「科目余额表 → 明细账 → 那张凭证」。
 
@@ -274,7 +280,7 @@ detail 里指明应费用化。`amount: null` 是**显式取消**门槛——`am
 
 **序时账是查账的起点，凭证是终点**：`txnId` 只能从明细账行里捡到时，「先知道要查哪个科目」
 成了前提；序时账按凭证摊开一段期间的全部业务。查到 `txnId` 之后用
-`/fi/books/voucher/{txnId}` 打开那张凭证——「这笔 3000 借的是费用还是预付、对方科目是什么、
+`/fi/books/voucher/{txn_id}` 打开那张凭证——「这笔 3000 借的是费用还是预付、对方科目是什么、
 有没有标成本中心」只有凭证能答，这也是审计问的第一个问题。
 
 **结转凭证会被标出来**（`isClosing`）：它把损益搬进权益，金额看着像一笔业务发生额，
@@ -282,13 +288,13 @@ detail 里指明应费用化。`amount: null` 是**显式取消**门槛——`am
 
 ## 1j. 成本层与期末结转（月结清单第一步的料）
 
-| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
-|---|---|---|---|---|
-| GET | `/erp/supply-chain/v1/fi/cost/replay` | — | `method`/`provisionalBasis` + `closing`（结存，含 `basis=unknown`）+ `issues`（每笔出库成本，未知为 `null`）+ `gaps`（成本未知事实清单）+ `pools`（逐层） | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/cost/issue-price` | `sku`、`qty`（必填）；`warehouse`、`lot`（可选） | `unitCost`/`amount`/`layers`（消耗了哪几层）；取不到成本即拒 | `finance.read` |
-| GET | `/erp/supply-chain/v1/fi/reports/cogs-preview` | `period` | 预演：`total`/`issues`/`skipped` + `proposed=false`、`preview=true`、`blockers`、`canSubmit` | `finance.read` |
-| POST | `/erp/supply-chain/v1/fi/cost/cogs/{period}` | — | 待确认提案（借 `5000` / 贷 `1200`）+ `proposed=true` + `stableId` | `finance.write` |
-| POST | `/erp/supply-chain/v1/fi/cost/standard` | JSON：`sku`、`unitCost`、`currency` | 登记结果；`approvedBy` 取 `X-ERP-Staff`，**引擎身份一律拒** | `finance.write` |
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 响应字段 |
+|---|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/cost/replay` | — | `method`/`provisionalBasis` + `closing`（结存，含 `basis=unknown`）+ `issues`（每笔出库成本，未知为 `null`）+ `gaps`（成本未知事实清单）+ `pools`（逐层） | `finance.read` | method, provisionalBasis, closing, issues, gaps, pools, receipts, untilEventId |
+| GET | `/erp/supply-chain/v1/fi/cost/issue-price` | `sku`、`qty`（必填）；`warehouse`、`lot`（可选） | `unitCost`/`amount`/`layers`（消耗了哪几层）；取不到成本即拒 | `finance.read` | sku, qty, warehouse, lot, unitCost, amount, layers, method |
+| GET | `/erp/supply-chain/v1/fi/reports/cogs-preview` | `period` | 预演：`total`/`issues`/`skipped` + `proposed=false`、`preview=true`、`blockers`、`canSubmit` | `finance.read` | period, total, issues, skipped, proposed, preview, blockers, canSubmit, method, grain, partial |
+| POST | `/erp/supply-chain/v1/fi/cost/cogs/{period}` | — | 待确认提案（借 `5000` / 贷 `1200`）+ `proposed=true` + `stableId` | `finance.write` | — |
+| POST | `/erp/supply-chain/v1/fi/cost/standard` | JSON：`sku`、`unitCost`、`currency` | 登记结果；`approvedBy` 取 `X-ERP-Staff`，**引擎身份一律拒** | `finance.write` | — |
 
 **输入从哪来**：`POST /sp/arrival-notices` 每行带 `cost` 落 `goods_received`，
 提货出库落 `goods_issued`——成本引擎重放的就是这两类 accepted 事件。
