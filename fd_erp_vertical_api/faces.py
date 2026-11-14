@@ -1377,6 +1377,58 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth) -> None:
         """现金流量表（直接法；本期 + 上年同期 + 本年累计，含两条自证脚注）。"""
         return ok_shell(d.cn_statements.cash_flow(_period(request)))
 
+    # ---- 提案收件箱与拍板（确认门缺的那一侧）----
+
+    def _human(role: str) -> str:
+        """拍板/认证的经办人：取财务身份头，机器不得自证。"""
+        who = role.strip()
+        if not who or who in ("system", "agent"):
+            raise ApiError(
+                "INVALID_ARGUMENT",
+                f"须人工拍板：{who or '（空）'} 不得代替人确认提案"
+                "（确认是这一笔分录成为事实的唯一入口）",
+                detail={"provided": who})
+        return who
+
+    @app.get("/erp/supply-chain/v1/fi/proposals")
+    async def fi_proposals(request: Request,
+                           ctx: dict = Depends(fi_route("finance.read"))):
+        """提案收件箱：默认全部状态，`status` 可收窄到 pending/confirmed/rejected。"""
+        status = request.query_params.get("status")
+        return ok_shell(d.kernel.list_proposals(status=status)["proposals"])
+
+    @app.get("/erp/supply-chain/v1/fi/proposals/{proposal_id}")
+    async def fi_proposal(request: Request, proposal_id: int,
+                          ctx: dict = Depends(fi_route("finance.read"))):
+        rows = d.kernel.list_proposals()["proposals"]
+        hit = next((r for r in rows if int(r.get("id") or 0) == proposal_id), None)
+        if hit is None:
+            raise ApiError("NOT_FOUND", "提案不存在",
+                           detail={"proposal_id": proposal_id})
+        return ok_shell(hit)
+
+    @app.post("/erp/supply-chain/v1/fi/proposals/{proposal_id}/confirm")
+    async def fi_confirm(request: Request, proposal_id: int,
+                         ctx: dict = Depends(fi_route("finance.confirm"))):
+        """确认提案 → 它成为账本事实。这是唯一入口，所以权限独立、且必须人工。"""
+        return ok_shell(d.kernel.confirm_proposal(
+            proposal_id=proposal_id, confirmed_by=_human(ctx["staff"])))
+
+    @app.post("/erp/supply-chain/v1/fi/proposals/{proposal_id}/reject")
+    async def fi_reject(request: Request, proposal_id: int,
+                        ctx: dict = Depends(fi_route("finance.confirm"))):
+        """退回提案。`reason` 必填——不带理由的退回等于没退回，提出方不知道要改什么。"""
+        body = await request.json() if await request.body() else {}
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        reason = str(body.get("reason") or "").strip()
+        if not reason:
+            raise ApiError("INVALID_ARGUMENT", "退回必须带理由（reason）",
+                           detail={"required": "reason"})
+        return ok_shell(d.kernel.reject_proposal(
+            proposal_id=proposal_id, reason=reason,
+            rejected_by=_human(ctx["staff"])))
+
     # ---- 发票台账（录入与查询；抵扣判断在台账里，这一层只投影）----
 
     @app.get("/erp/supply-chain/v1/fi/invoices")
@@ -1453,6 +1505,71 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth) -> None:
             raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
         return ok_shell(d.cn_invoices.certify(
             number, certified_on=body.get("certifiedOn"), by=ctx["staff"]))
+
+    @app.post("/erp/supply-chain/v1/fi/invoices/red")
+    async def fi_register_red(request: Request,
+                              ctx: dict = Depends(fi_route("finance.write"))):
+        """登记红字票冲减蓝字原票。红字票是独立票据（自己的号码与日期），原票不动。"""
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        # 红字票的票种与税率**由原票决定**（台账从 redOf 那张票推税额），
+        # 所以这里不收 rate/tax——收进来只会让人以为能改，实际会被忽略。
+        unknown = sorted(set(body) - {"direction", "kind", "number", "net", "redOf",
+                                      "reason", "issuedOn"})
+        if unknown:
+            raise ApiError("INVALID_ARGUMENT", f"未知字段：{'、'.join(unknown)}",
+                           detail={"allowed": ["direction", "kind", "number", "net",
+                                               "redOf", "reason", "issuedOn"]})
+        return ok_shell(d.cn_invoices.register_red(
+            body.get("direction"), body.get("kind"), body.get("number"),
+            body.get("net"), red_of=body.get("redOf"),
+            reason=body.get("reason"), issued_on=body.get("issuedOn"),
+            submitted_by=ctx["staff"]))
+
+    @app.post("/erp/supply-chain/v1/fi/invoices/{number}/post")
+    async def fi_post_invoice(request: Request, number: str,
+                              ctx: dict = Depends(fi_route("finance.write"))):
+        """用已登记的进项票过账：只提待确认提案，不直接写分录。
+
+        按台账判抵扣（不可抵的税进成本）——判断在台账里，这里只发起。
+        """
+        body = await request.json() if await request.body() else {}
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        unknown = sorted(set(body) - {"ref", "amount", "costAccount", "settleAccount",
+                                      "gross", "bookedOn"})
+        if unknown:
+            raise ApiError("INVALID_ARGUMENT", f"未知字段：{'、'.join(unknown)}",
+                           detail={"allowed": ["ref", "amount", "costAccount",
+                                               "settleAccount", "gross", "bookedOn"]})
+        ref = str(body.get("ref") or f"invoice:{number}").strip()
+        return ok_shell(d.cn_invoices.purchase(
+            ref, number, body.get("amount"),
+            cost_account=str(body.get("costAccount") or "5000"),
+            settle_account=str(body.get("settleAccount") or "2000"),
+            gross=bool(body.get("gross", True)), booked_on=body.get("bookedOn"),
+            submitted_by=ctx["staff"]))
+
+    @app.post("/erp/supply-chain/v1/fi/invoices/{number}/post-red")
+    async def fi_post_red(request: Request, number: str,
+                          ctx: dict = Depends(fi_route("finance.write"))):
+        """红字销售票过账（与现销逐行反向），同样只提提案。"""
+        body = await request.json() if await request.body() else {}
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        unknown = sorted(set(body) - {"ref", "amount", "revenueAccount",
+                                      "settleAccount", "bookedOn"})
+        if unknown:
+            raise ApiError("INVALID_ARGUMENT", f"未知字段：{'、'.join(unknown)}",
+                           detail={"allowed": ["ref", "amount", "revenueAccount",
+                                               "settleAccount", "bookedOn"]})
+        ref = str(body.get("ref") or f"red:{number}").strip()
+        return ok_shell(d.cn_invoices.post_red(
+            ref, number, body.get("amount"),
+            revenue_account=str(body.get("revenueAccount") or "4000"),
+            settle_account=str(body.get("settleAccount") or "1100"),
+            booked_on=body.get("bookedOn"), submitted_by=ctx["staff"]))
 
     @app.get("/erp/supply-chain/v1/fi/reports/surcharges")
     async def fi_surcharges(request: Request,

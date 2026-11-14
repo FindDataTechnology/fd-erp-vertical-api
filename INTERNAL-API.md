@@ -74,3 +74,26 @@
 
 **不做的**：过账（`purchase`/`post_red` 会提提案）与红字票登记属于确认门那一侧，
 与提案收件箱一起做——现在开一个只能提不能确认的入口只会积压。
+
+## 1d. 提案收件箱与拍板（确认门缺的那一侧）
+
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
+|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/proposals` | `status`（可选 pending/confirmed/rejected） | 提案列表（含 id、kind、lane_title、stable_id、状态、提交人） | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/proposals/{id}` | — | 单条提案（含分录行）；不存在 → `NOT_FOUND` | `finance.read` |
+| POST | `/erp/supply-chain/v1/fi/proposals/{id}/confirm` | — | 确认结果；`confirmed_by` 取 `X-ERP-Staff` | `finance.confirm` |
+| POST | `/erp/supply-chain/v1/fi/proposals/{id}/reject` | JSON：`reason`（**必填**） | 退回结果；不带理由即拒 | `finance.confirm` |
+| POST | `/erp/supply-chain/v1/fi/invoices/red` | JSON：`direction`、`kind`、`number`、`net`、`redOf`（必填）、`reason`、`issuedOn` | 红字票（负数金额，原票不动）；票种与税率由原票决定，不收 `rate`/`tax` | `finance.write` |
+| POST | `/erp/supply-chain/v1/fi/invoices/{number}/post` | JSON：`ref`、`amount`、`costAccount`、`settleAccount`、`gross`、`bookedOn` | 待确认提案（**不直接写分录**） | `finance.write` |
+| POST | `/erp/supply-chain/v1/fi/invoices/{number}/post-red` | JSON：`ref`、`amount`、`revenueAccount`、`settleAccount`、`bookedOn` | 待确认提案（与现销逐行反向） | `finance.write` |
+
+**权限三档互不覆盖**：`finance.read` 看提案；`finance.write` 登记票与过账（只提提案）；
+**`finance.confirm` 才能确认/退回**。「能登记一张票」与「能让这笔分录成为事实」是两件事，
+后者是账本不可逆的一步。
+
+**机器不得拍板**：`confirmed_by`/`rejected_by` 取自 `X-ERP-Staff`，`system`/`agent`/空一律拒
+——与发票认证同一纪律。
+
+**退回必须带理由**：不带理由的退回等于没退回，提出方不知道要改什么。
+
+**为什么不做批量确认**：一次确认几十条会让「逐笔看过」这句话失去意义，而确认是唯一入口。
