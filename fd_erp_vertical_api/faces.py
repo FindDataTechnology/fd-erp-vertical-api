@@ -1705,3 +1705,107 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth) -> None:
         未登记申报数时仍按账面视同申报，`provided=false` 且口径说明写明「不能当作已核对」。
         """
         return ok_shell(d.cn_filing.vat_reconciliation(_period(request)))
+
+    # ---- 账龄与坏账准备（催收与期末减值；同一套 FIFO 账龄实现）----
+
+    def _aging_kwargs(request: Request) -> dict[str, Any]:
+        """`asOf` / `dimension` / `buckets` 的解析：只做形状转换，不在这一层判口径。
+
+        `buckets` 用逗号分隔（`30,60,90`）——账龄分界是客户习惯不同的东西，
+        写死三档会让某些客户看到的表永远不是他们习惯的切法。
+        """
+        out: dict[str, Any] = {}
+        as_of = (request.query_params.get("asOf") or "").strip()
+        if as_of:
+            out["as_of"] = as_of
+        dimension = (request.query_params.get("dimension") or "").strip()
+        if dimension:
+            out["dimension"] = dimension
+        raw = (request.query_params.get("buckets") or "").strip()
+        if raw:
+            try:
+                out["buckets"] = tuple(int(p) for p in raw.split(",") if p.strip())
+            except ValueError:
+                raise ApiError("INVALID_ARGUMENT",
+                               f"buckets 须为逗号分隔的正整数：{raw!r}",
+                               detail={"example": "30,60,90"}) from None
+        return out
+
+    @app.get("/erp/supply-chain/v1/fi/receivables/aging")
+    async def fi_receivable_aging(request: Request,
+                                  ctx: dict = Depends(fi_route("finance.read"))):
+        """应收账龄：按往来对象 × 账龄桶，FIFO 核销。
+
+        原样带出车道自己的自证（`consistent` 与不平时的 `error`）——**不在这里调桶凑平**。
+        收多了的对象单列 `advanceReceipt`，不摊给任何桶。
+        """
+        return ok_shell(d.receivables.report(**_aging_kwargs(request)))
+
+    @app.get("/erp/supply-chain/v1/fi/payables/aging")
+    async def fi_payable_aging(request: Request,
+                               ctx: dict = Depends(fi_route("finance.read"))):
+        """应付账龄：与应收共用同一份实现，只是开放方向相反。"""
+        return ok_shell(d.payables.report(**_aging_kwargs(request)))
+
+    @app.get("/erp/supply-chain/v1/fi/bad-debts/schedule")
+    async def fi_bad_debt_schedule(ctx: dict = Depends(fi_route("finance.read"))):
+        """当前生效的分档费率（含 `registered=false`：还没人登记过）。"""
+        return ok_shell(d.bad_debts.schedule())
+
+    @app.post("/erp/supply-chain/v1/fi/bad-debts/schedule")
+    async def fi_set_bad_debt_schedule(request: Request,
+                                       ctx: dict = Depends(fi_route("finance.write"))):
+        """登记分档费率（人工 only，追加式修订）。
+
+        经办人取财务身份头，`system`/`agent` 由车道拒——费率是**会计估计**，
+        要写进报表附注对审计解释，机器不得自设。
+        """
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        unknown = sorted(set(body) - {"bands"})
+        if unknown:
+            raise ApiError("INVALID_ARGUMENT", f"未知字段：{'、'.join(unknown)}",
+                           detail={"allowed": ["bands"]})
+        return ok_shell(d.bad_debts.set_schedule(body.get("bands") or [],
+                                                 registered_by=ctx["staff"]))
+
+    @app.get("/erp/supply-chain/v1/fi/bad-debts/status")
+    async def fi_bad_debt_status(request: Request,
+                                 ctx: dict = Depends(fi_route("finance.read"))):
+        """准备余额 / 应收净额 / 覆盖率 / 分档表（`asOf` 缺省取今天）。"""
+        as_of = (request.query_params.get("asOf") or "").strip() or None
+        return ok_shell(d.bad_debts.status(as_of=as_of))
+
+    @app.get("/erp/supply-chain/v1/fi/reports/bad-debt-preview")
+    async def fi_bad_debt_preview(request: Request,
+                                  ctx: dict = Depends(fi_route("finance.read"))):
+        """计提预演：只算不写。
+
+        与附加税/所得税预演同一纪律——看一眼就生成一笔待确认提案，是谁点的、
+        点两次会不会重复，事后都说不清。真计提会被什么挡住（跨期调整 / 须先作废 /
+        noop）以 `blockers` 报出，而不是抛错。
+        """
+        period = _period(request)
+        as_of = (request.query_params.get("asOf") or "").strip() or None
+        return ok_shell(d.bad_debts.provision(period, as_of=as_of, preview=True))
+
+    @app.post("/erp/supply-chain/v1/fi/bad-debts/{period}/accrue")
+    async def fi_accrue_bad_debt(period: str,
+                                 ctx: dict = Depends(fi_route("finance.write"))):
+        """提交某期间计提（只出提案，仍要过确认门）。"""
+        return ok_shell(d.bad_debts.provision(period, submitted_by=ctx["staff"]))
+
+    @app.post("/erp/supply-chain/v1/fi/bad-debts/{period}/void")
+    async def fi_void_bad_debt(period: str, request: Request,
+                               ctx: dict = Depends(fi_route("finance.write"))):
+        """作废某期尚未确认的计提。`reason` 必填——不带理由的重算等于偷改估计。"""
+        body = await request.json() if await request.body() else {}
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        reason = str(body.get("reason") or "").strip()
+        if not reason:
+            raise ApiError("INVALID_ARGUMENT", "作废必须带理由（reason）",
+                           detail={"required": "reason"})
+        return ok_shell(d.bad_debts.void(period, reason=reason,
+                                         voided_by=ctx["staff"]))

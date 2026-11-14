@@ -118,3 +118,29 @@
 
 **期初只在空账上可录**（车道强制）：事后插入会改写全部历史报表；确需补录必须
 `allowWithEntries` + `reason`，受权偏离要留痕。
+
+## 1f. 账龄与坏账准备（催收与期末减值）
+
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
+|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/receivables/aging` | `asOf`、`dimension`（customer/supplier/…）、`buckets`（逗号分隔，如 `30,60,90`） | 按对象的账龄表 + `totals` + `totalOutstanding` + `advanceReceipt`（多收单列）+ `accountNetBalance` + `consistent`（不平带 `error`） | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/payables/aging` | 同上 | 同上（应付口径，多付为 `advancePayment`） | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/bad-debts/schedule` | — | 当前分档费率 + `registered`（未登记为 false） | `finance.read` |
+| POST | `/erp/supply-chain/v1/fi/bad-debts/schedule` | JSON：`bands`（`[{maxDays, rate}]`，最后一档 `maxDays` 留空） | 新版本号；`registeredBy` 取 `X-ERP-Staff`，**system/agent 一律拒** | `finance.write` |
+| GET | `/erp/supply-chain/v1/fi/bad-debts/status` | `asOf`（缺省今天） | `outstanding` / `allowance` / `netReceivable` / `coverage` / `bands` | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/reports/bad-debt-preview` | `period`、`asOf`（可选） | 预演：`target`/`existing`/`delta`/`rows` + `proposed=false`、`preview=true`、`blockers`（真计提会被什么挡住）、`canSubmit` | `finance.read` |
+| POST | `/erp/supply-chain/v1/fi/bad-debts/{period}/accrue` | — | 待确认提案（借 `6602` / 贷 `1231`；减少记反向）+ `proposed=true` + `stableId` | `finance.write` |
+| POST | `/erp/supply-chain/v1/fi/bad-debts/{period}/void` | JSON：`reason`（**必填**） | 作废结果；重提要换稳定键（`bad-debt:{period}#N`） | `finance.write` |
+
+**预演只算不写**：不生成提案、不落事件档。真计提会撞上的三件事（同期间已确认且金额不同＝跨期调整
+不允许／同期间待确认且金额不同须先作废／应计提额与账上准备一致＝noop）以 `blockers` 报出，
+**不抛错**——看一眼数字不该被挡住。
+
+**计提额是增量**：`应计提 = Σ(账龄桶 × 费率)`，落账金额永远是 `应计提 − 账上已有准备`，
+为负记反向（冲回）。这样做重跑幂等、跨期只影响各自差额。
+
+**费率只能人工登记**：分档与费率是会计估计，要写进报表附注对审计解释；程序车道提交一律拒。
+未登记费率时计提被拒（不猜默认费率）。
+
+**账龄不平如实报出**：`各桶合计 − 多收/多付` 必须等于科目净额，不等时 `consistent=false`
+并带 `error`——端点**不调桶凑平**。
