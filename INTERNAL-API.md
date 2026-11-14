@@ -144,3 +144,29 @@
 
 **账龄不平如实报出**：`各桶合计 − 多收/多付` 必须等于科目净额，不等时 `consistent=false`
 并带 `error`——端点**不调桶凑平**。
+
+## 1g. 固定资产（台账 / 资本化门槛 / 月度折旧）
+
+| 方法 | 路径 | 请求要点 | 响应要点 | 权限 |
+|---|---|---|---|---|
+| GET | `/erp/supply-chain/v1/fi/assets` | — | 固定资产清单：原值 / 残值 / 累计折旧 / 净值 / 剩余月数 / 折旧方法及其出处 | `finance.read` |
+| POST | `/erp/supply-chain/v1/fi/assets` | JSON：`assetId`、`name`、`cost`、`acquiredOn`、`usefulLifeMonths`、`salvage`、`currency`、`category`、`expenseAccount`、`method`、`unitsTotal` | 登记结果；同标识幂等；低于资本化门槛即拒并指明应费用化（`treatment=expense`） | `finance.write` |
+| GET | `/erp/supply-chain/v1/fi/assets/summary` | — | 规模（项数 / 原值 / 累计折旧 / 净值）+ 资本化门槛 + 折旧方法与台账归属口径 | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/assets/{assetId}` | — | 单项资产；不存在 → `NOT_FOUND`（不返回零对象） | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/assets/{assetId}/plan` | — | 完整折旧计划：每期金额 / 累计 / 期末净值 + `booked` 已计提标记 | `finance.read` |
+| GET | `/erp/supply-chain/v1/fi/assets/{assetId}/book-value` | `asOf`（`YYYY-MM` 或 `YYYY-MM-DD`，可选） | 原值 / 累计折旧 / 净值 / `fullyDepreciated` | `finance.read` |
+| POST | `/erp/supply-chain/v1/fi/assets/threshold` | JSON：`amount`（**键必须出现**，`null`＝取消门槛）、`currency` | 门槛结果；`approvedBy` 取 `X-ERP-Staff`，**system/asset-engine 等程序身份一律拒** | `finance.write` |
+| GET | `/erp/supply-chain/v1/fi/reports/depreciation-preview` | `period` | 预演：逐资产计提额 + `total` + `proposed=false`、`preview=true`、`blockers`、`canSubmit` | `finance.read` |
+| POST | `/erp/supply-chain/v1/fi/assets/depreciation/{period}` | JSON 可选：`units`（工作量法资产当期产量，`{assetId: 数量}`） | 待确认提案（借费用 / 贷 `1602`）+ `proposed=true` + `stableId` | `finance.write` |
+| POST | `/erp/supply-chain/v1/fi/assets/depreciation/{period}/void` | JSON：`reason`（**必填**） | 作废结果；已过门落账的须先在内核冲正 | `finance.write` |
+
+**预演只算不写**：不生成提案、不落事件档。已计提过的期间照样可用——可提额如实为 0 并说明
+「这期不会再提」，而不是拿「已计提」把人挡在门外。
+
+**资本化门槛是闸不是备注**：门槛由人工登记（程序身份一律拒），低于门槛的资产登记被拒并在
+detail 里指明应费用化。`amount: null` 是**显式取消**门槛——`amount` 键必须出现，少写一个键
+不该把闸悄悄清掉。
+
+**折旧口径在车道里**：三种方法（直线 / 双倍余额递减含末期改直线 / 工作量法）、末期封顶、
+已提足判断、作废后重提换稳定键，全在 `FixedAssetLane`；端点只做投影与身份注入。
+工作量法缺预计总产量或当期产量时被拒并点名资产，**不用时间折旧顶替**。

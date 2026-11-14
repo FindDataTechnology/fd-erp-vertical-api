@@ -1789,7 +1789,6 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth) -> None:
         period = _period(request)
         as_of = (request.query_params.get("asOf") or "").strip() or None
         return ok_shell(d.bad_debts.provision(period, as_of=as_of, preview=True))
-
     @app.post("/erp/supply-chain/v1/fi/bad-debts/{period}/accrue")
     async def fi_accrue_bad_debt(period: str,
                                  ctx: dict = Depends(fi_route("finance.write"))):
@@ -1809,3 +1808,133 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth) -> None:
                            detail={"required": "reason"})
         return ok_shell(d.bad_debts.void(period, reason=reason,
                                          voided_by=ctx["staff"]))
+
+    # ---- 固定资产台账与折旧（本轮：台账 + 门槛 + 月度折旧）----
+
+    @app.get("/erp/supply-chain/v1/fi/assets")
+    async def fi_assets(ctx: dict = Depends(fi_route("finance.read"))):
+        """固定资产清单：每项原值 / 残值 / 已提 / 净值 / 剩余月数。"""
+        return ok_shell(d.assets.assets())
+
+    @app.get("/erp/supply-chain/v1/fi/assets/summary")
+    async def fi_asset_summary(ctx: dict = Depends(fi_route("finance.read"))):
+        """台账摘要：规模 + 资本化门槛 + 折旧方法与台账归属口径。
+
+        门槛放在这里一起返回，而不是单开一个 GET：**没有门槛**（`None`）与
+        「门槛是 0」是两件事，摘要里一眼能分辨，单独一个 GET 只会多一次往返。
+        """
+        return ok_shell(d.assets.summary())
+
+    @app.post("/erp/supply-chain/v1/fi/assets/threshold")
+    async def fi_set_asset_threshold(request: Request,
+                                     ctx: dict = Depends(fi_route("finance.write"))):
+        """登记资本化门槛（人工 only）。
+
+        `amount` 键**必须显式出现**：`null` 才表示「取消门槛」。少写一个键就把门槛
+        悄悄清掉，会让此后所有低值支出都被资本化，而没有人会注意到闸没了。
+        """
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        unknown = sorted(set(body) - {"amount", "currency"})
+        if unknown:
+            raise ApiError("INVALID_ARGUMENT", f"未知字段：{'、'.join(unknown)}",
+                           detail={"allowed": ["amount", "currency"]})
+        if "amount" not in body:
+            raise ApiError("INVALID_ARGUMENT",
+                           "必须显式给出 amount（null 表示取消门槛）",
+                           detail={"required": "amount", "example": {"amount": "5000"}})
+        return ok_shell(d.assets.set_threshold(
+            body.get("amount"), currency=body.get("currency") or "CNY",
+            approved_by=ctx["staff"]))
+
+    @app.get("/erp/supply-chain/v1/fi/reports/depreciation-preview")
+    async def fi_depreciation_preview(request: Request,
+                                      ctx: dict = Depends(fi_route("finance.read"))):
+        """折旧预演：只算不写。
+
+        已计提过的期间照样给数（可提额为 0 并说明原因），不拿「已计提」把人挡在门外。
+        """
+        return ok_shell(d.assets.depreciate(_period(request), preview=True))
+
+    @app.post("/erp/supply-chain/v1/fi/assets/depreciation/{period}")
+    async def fi_depreciate(period: str, request: Request,
+                            ctx: dict = Depends(fi_route("finance.write"))):
+        """提交某期间折旧（只出提案，仍要过确认门）。
+
+        `units` 只有工作量法的资产需要；缺了由车道点名拒，不猜产量。
+        """
+        body = await request.json() if await request.body() else {}
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        unknown = sorted(set(body) - {"units"})
+        if unknown:
+            raise ApiError("INVALID_ARGUMENT", f"未知字段：{'、'.join(unknown)}",
+                           detail={"allowed": ["units"]})
+        return ok_shell(d.assets.depreciate(period, units=body.get("units") or {},
+                                            submitted_by=ctx["staff"]))
+
+    @app.post("/erp/supply-chain/v1/fi/assets/depreciation/{period}/void")
+    async def fi_void_depreciation(period: str, request: Request,
+                                   ctx: dict = Depends(fi_route("finance.write"))):
+        """作废某期折旧。`reason` 必填——退回理由就是审计线索。"""
+        body = await request.json() if await request.body() else {}
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        reason = str(body.get("reason") or "").strip()
+        if not reason:
+            raise ApiError("INVALID_ARGUMENT", "作废计提须说明原因（reason）",
+                           detail={"required": "reason"})
+        return ok_shell(d.assets.void(period, reason=reason,
+                                      voided_by=ctx["staff"]))
+
+    @app.post("/erp/supply-chain/v1/fi/assets")
+    async def fi_register_asset(request: Request,
+                                ctx: dict = Depends(fi_route("finance.write"))):
+        """登记一项固定资产（受资本化门槛约束；同标识幂等）。
+
+        门槛在这里是**闸**：低于门槛直接拒并指明应费用化——把「多小就不该进固定资产」
+        这条政策判断留在车道里，而不是让登记的人自己记得。
+        """
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ApiError("INVALID_ARGUMENT", "请求体须为 JSON 对象")
+        allowed = ["assetId", "name", "cost", "acquiredOn", "usefulLifeMonths",
+                   "salvage", "currency", "category", "expenseAccount", "method",
+                   "unitsTotal"]
+        unknown = sorted(set(body) - set(allowed))
+        if unknown:
+            raise ApiError("INVALID_ARGUMENT", f"未知字段：{'、'.join(unknown)}",
+                           detail={"allowed": allowed})
+        return ok_shell(d.assets.register(
+            body.get("assetId"), body.get("name"),
+            cost=body.get("cost"), acquired_on=body.get("acquiredOn"),
+            useful_life_months=body.get("usefulLifeMonths"),
+            salvage=body.get("salvage", 0),
+            currency=body.get("currency") or "CNY",
+            category=body.get("category"),
+            expense_account=body.get("expenseAccount") or "5200",
+            method=body.get("method"), units_total=body.get("unitsTotal"),
+            registered_by=ctx["staff"]))
+
+    @app.get("/erp/supply-chain/v1/fi/assets/{asset_id}")
+    async def fi_asset(asset_id: str,
+                       ctx: dict = Depends(fi_route("finance.read"))):
+        """单项资产（含累计折旧与净值）。不存在 → `NOT_FOUND`，不返回零对象。"""
+        row = next((r for r in d.assets.assets() if r["assetId"] == asset_id), None)
+        if row is None:
+            raise ApiError("NOT_FOUND", "资产不存在", detail={"assetId": asset_id})
+        return ok_shell(row)
+
+    @app.get("/erp/supply-chain/v1/fi/assets/{asset_id}/plan")
+    async def fi_asset_plan(asset_id: str,
+                            ctx: dict = Depends(fi_route("finance.read"))):
+        """完整折旧计划（每期金额 / 累计 / 期末净值 + 是否已计提）。"""
+        return ok_shell(d.assets.plan(asset_id))
+
+    @app.get("/erp/supply-chain/v1/fi/assets/{asset_id}/book-value")
+    async def fi_asset_book_value(request: Request, asset_id: str,
+                                  ctx: dict = Depends(fi_route("finance.read"))):
+        """账面净值；`asOf`（YYYY-MM 或 YYYY-MM-DD）可回看某一期末。"""
+        as_of = (request.query_params.get("asOf") or "").strip() or None
+        return ok_shell(d.assets.book_value(asset_id, as_of=as_of))
