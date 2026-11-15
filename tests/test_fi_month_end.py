@@ -66,7 +66,7 @@ def _post_sale(client) -> None:
     d = client.app.state.drivers
     d.cn_tax.post_sale("ME-S1", "1130", rate="13", gross=True,
                        booked_on="2026-11-10", submitted_by="cfo@example")
-    for prop in d.kernel.list_proposals(status="pending")["proposals"]:
+    for prop in d.kernel.list_proposals(status="pending")["data"]:
         d.kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo@example")
 
 
@@ -163,7 +163,7 @@ def test_opening_is_refused_when_the_ledger_already_has_entries(rwc):
 
 
 def _pending(d) -> list[dict]:
-    return d.kernel.list_proposals(status="pending")["proposals"]
+    return d.kernel.list_proposals(status="pending")["data"]
 
 
 # ---- 6) 结转两段 ----

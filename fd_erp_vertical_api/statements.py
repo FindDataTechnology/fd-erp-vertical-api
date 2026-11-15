@@ -23,6 +23,7 @@ from fd_erp_vertical_templates.errors import TemplateError
 
 from .drivers import Drivers
 from .errors import ApiError
+from .kernel_client import proposal_rows
 
 
 def _statement_id(tenant: str, customer_id: str, period: str) -> str:
@@ -66,7 +67,7 @@ class StatementService:
         """stable_id → proposal 状态（内核 proposal 面为状态真源）。"""
         out: dict[str, str] = {}
         listed = self._kernel.list_proposals()
-        for row in listed.get("proposals") or []:
+        for row in proposal_rows(listed):
             sid = str(row.get("stable_id") or "")
             if sid.startswith("statement-confirm|"):
                 out[sid] = str(row.get("status") or "")

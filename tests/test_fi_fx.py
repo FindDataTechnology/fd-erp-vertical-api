@@ -89,7 +89,7 @@ def _seed_usd_receivable(client, *, base_rate="7.00", when="2026-11-05",
              "fx_source": "ecb-exr"},
         ], source_ref="fx-seed:ar", kind="journal", lane_title="出口销售（USD）",
         submitted_by="cfo@example", booked_on=when)
-    for prop in kernel.list_proposals(status="pending")["proposals"]:
+    for prop in kernel.list_proposals(status="pending")["data"]:
         kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo@example")
 
 
@@ -102,7 +102,7 @@ def _register(client, rate="7.20", *, source="中国银行 2026-11-30 中间价"
 
 
 def _pending(d) -> int:
-    return len(d.kernel.list_proposals(status="pending")["proposals"])
+    return len(d.kernel.list_proposals(status="pending")["data"])
 
 
 def _balance(d, code: str):
@@ -258,7 +258,7 @@ def test_after_confirming_the_rerun_is_a_noop_with_zero_difference(rw):
     _register(rw)
     d = rw.app.state.drivers
     rw.post(f"{BASE}/fx/revaluation/{PERIOD}", headers=H)
-    pending = d.kernel.list_proposals(status="pending")["proposals"]
+    pending = d.kernel.list_proposals(status="pending")["data"]
     for prop in pending:
         d.kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo@example")
     body = rw.post(f"{BASE}/fx/revaluation/{PERIOD}", headers=H).json()["data"]
@@ -283,7 +283,7 @@ def test_status_follows_the_proposal_not_a_flag(rw):
     rw.post(f"{BASE}/fx/revaluation/{PERIOD}", headers=H)
     assert rw.get(f"{BASE}/fx/status/{PERIOD}", headers=H).json()["data"]["state"] == "pending"
     d = rw.app.state.drivers
-    for prop in d.kernel.list_proposals(status="pending")["proposals"]:
+    for prop in d.kernel.list_proposals(status="pending")["data"]:
         d.kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo@example")
     body = rw.get(f"{BASE}/fx/status/{PERIOD}", headers=H).json()["data"]
     assert body["state"] == "posted" and body["attempts"] == 1

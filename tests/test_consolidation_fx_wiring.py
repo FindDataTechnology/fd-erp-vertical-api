@@ -96,7 +96,7 @@ def test_closing_rate_caliber_translates_and_still_balances(client_faces):
                                     source="PBOC 日均 2026-11", kind="average",
                                     registered_by="cfo")
 
-    pending_before = len(d.kernel.list_proposals(status="pending")["proposals"])
+    pending_before = len(d.kernel.list_proposals(status="pending")["data"])
     out = d.consolidation.report("2026-11")
     assert out["fxTranslation"] == "closing-rate"
     assert out["balanced"] is True, out.get("error")
@@ -110,7 +110,7 @@ def test_closing_rate_caliber_translates_and_still_balances(client_faces):
     assert out["elimination"]["computed"]["assets"] == "700.00"
     assert out["elimination"]["unmatched"][0]["amount"] == "20.00"
     # 折算与合并都不落分录
-    assert len(d.kernel.list_proposals(status="pending")["proposals"]) == pending_before
+    assert len(d.kernel.list_proposals(status="pending")["data"]) == pending_before
     assert (Decimal(out["combined"]["assets"])
             == Decimal(out["combined"]["liabilities"])
             + Decimal(out["combined"]["equity"])

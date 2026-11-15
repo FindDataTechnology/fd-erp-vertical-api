@@ -36,7 +36,7 @@ def test_depreciation_posts_to_1602_after_the_confirmation_gate(client_faces):
     assert [(a["assetId"], a["amount"], a["expenseAccount"])
             for a in out["assets"]] == [("FA-M1", "1000.00", "5200")]
 
-    pending = d.kernel.list_proposals(status="pending")["proposals"]
+    pending = d.kernel.list_proposals(status="pending")["data"]
     hit = next(p for p in pending if p["stable_id"] == "depr:2026-02")
     assert hit["status"] == "pending"                  # 没跳过确认门
 

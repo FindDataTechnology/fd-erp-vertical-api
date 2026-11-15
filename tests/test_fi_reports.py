@@ -237,7 +237,7 @@ def fi_rw_client(reset_db, tmp_path, dsn):
 
 
 def _pending(d) -> int:
-    return len(d.kernel.list_proposals(status="pending")["proposals"])
+    return len(d.kernel.list_proposals(status="pending")["data"])
 
 
 def test_a_read_only_account_cannot_register_a_filing_number(fi_client):

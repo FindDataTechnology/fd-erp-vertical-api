@@ -50,7 +50,7 @@ def test_month_end_prepares_requires_confirmation_then_closes(client_faces):
     assert again["closed"] is False
 
     # 人工过门（list_proposals 的行键是 id，不是 proposal_id）
-    for prop in d.kernel.list_proposals(status="pending")["proposals"]:
+    for prop in d.kernel.list_proposals(status="pending")["data"]:
         d.kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo")
 
     # 费用类提案落账后，第四步结转损益才出得来（它只认已落账分录）
@@ -59,7 +59,7 @@ def test_month_end_prepares_requires_confirmation_then_closes(client_faces):
     assert closing_step["state"] == "prepared", closing_step
     assert after["closed"] is False            # 结转提案本身还得过门
 
-    for prop in d.kernel.list_proposals(status="pending")["proposals"]:
+    for prop in d.kernel.list_proposals(status="pending")["data"]:
         d.kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo")
 
     final = d.month_end.run("2026-11", close=True)

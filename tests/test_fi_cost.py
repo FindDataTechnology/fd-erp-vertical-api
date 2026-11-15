@@ -107,7 +107,7 @@ def _seed(client, *, cost="100", issue_qty="4") -> None:
 
 
 def _pending(d) -> int:
-    return len(d.kernel.list_proposals(status="pending")["proposals"])
+    return len(d.kernel.list_proposals(status="pending")["data"])
 
 
 def _balance(d, code: str) -> Decimal:
@@ -231,7 +231,7 @@ def test_cogs_posts_a_proposal_only(rw):
     assert _balance(d, "1200") == Decimal(1000)
     assert _pending(d) == before + 1
 
-    prop = d.kernel.list_proposals(status="pending")["proposals"][0]
+    prop = d.kernel.list_proposals(status="pending")["data"][0]
     d.kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo@example")
     assert _balance(d, "5000") == Decimal(400)
     assert _balance(d, "1200") == Decimal(600)

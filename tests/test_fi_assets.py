@@ -69,7 +69,7 @@ def ro(reset_db, tmp_path, dsn):
 
 
 def _pending(d) -> int:
-    return len(d.kernel.list_proposals(status="pending")["proposals"])
+    return len(d.kernel.list_proposals(status="pending")["data"])
 
 
 def _register(client, **over) -> dict:
@@ -218,7 +218,7 @@ def test_depreciate_only_proposes_until_confirmed(rw):
     assert Decimal(_balance(d, "1602")) == Decimal(0)   # 确认门前累计折旧为 0
     assert _pending(d) == 1
 
-    prop = d.kernel.list_proposals(status="pending")["proposals"][0]
+    prop = d.kernel.list_proposals(status="pending")["data"][0]
     d.kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo@example")
     assert Decimal(_balance(d, "1602")) == Decimal("-1000")   # 贷方余额记负数
 

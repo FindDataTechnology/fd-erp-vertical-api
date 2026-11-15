@@ -62,7 +62,7 @@ def env(reset_db, tmp_path, dsn):
 
 def _confirm_all(d) -> int:
     """过确认门：把所有待确认提案确认为事实（验收里我们扮演财务）。"""
-    pending = d.kernel.list_proposals(status="pending")["proposals"]
+    pending = d.kernel.list_proposals(status="pending")["data"]
     for prop in pending:
         d.kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo@example")
     return len(pending)
@@ -129,11 +129,11 @@ def test_the_whole_cn_finance_chain_holds_together(env):
     assert vat["declared"]["payable"] == "130.00"
 
     # ---- 5) 预演不写账 ----
-    pending_before = len(d.kernel.list_proposals(status="pending")["proposals"])
+    pending_before = len(d.kernel.list_proposals(status="pending")["data"])
     surcharge = d.cn_filing.surcharges(PERIOD, preview=True)
     prepay = d.cn_filing.income_tax_prepay(PERIOD, preview=True)
     assert surcharge["proposed"] is False and prepay["proposed"] is False
-    assert len(d.kernel.list_proposals(status="pending")["proposals"]) == pending_before
+    assert len(d.kernel.list_proposals(status="pending")["data"]) == pending_before
     assert surcharge["base"] == "130.00"              # 应纳增值税
     assert prepay["cumulativeProfit"] == "1000.00"
 

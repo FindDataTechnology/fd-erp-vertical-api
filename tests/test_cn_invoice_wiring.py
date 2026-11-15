@@ -10,7 +10,7 @@ from decimal import Decimal
 
 
 def _confirm(d) -> None:
-    for prop in d.kernel.list_proposals(status="pending")["proposals"]:
+    for prop in d.kernel.list_proposals(status="pending")["data"]:
         d.kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo")
 
 

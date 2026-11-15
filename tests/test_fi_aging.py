@@ -65,7 +65,7 @@ def ro(reset_db, tmp_path, dsn):
 
 
 def _confirm_all(d) -> int:
-    pending = d.kernel.list_proposals(status="pending")["proposals"]
+    pending = d.kernel.list_proposals(status="pending")["data"]
     for prop in pending:
         d.kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo@example")
     return len(pending)
@@ -82,7 +82,7 @@ def _seed_receivables(client) -> None:
 
 
 def _pending(d) -> int:
-    return len(d.kernel.list_proposals(status="pending")["proposals"])
+    return len(d.kernel.list_proposals(status="pending")["data"])
 
 
 def _rows_by_customer(report):

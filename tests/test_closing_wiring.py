@@ -63,7 +63,7 @@ def test_transfer_closes_profit_into_retained_and_reports_stay_right(client_face
     # ④ 幂等：不重复过账
     again = d.closing.transfer("2026-11")
     assert again["duplicate"] is True and again["posted"] is True
-    pending = d.kernel.list_proposals(status="pending")["proposals"]
+    pending = d.kernel.list_proposals(status="pending")["data"]
     assert [p for p in pending if p["stable_id"].startswith("close:2026-11")] == []
     balances = {r["account_code"]: r["balance"] for r in d.kernel.query_balance()["data"]}
     assert balances["4000"] == "0.000000"        # 收入已结平

@@ -94,7 +94,7 @@ def test_roster_garbage_and_empty_mean_nobody():
 def test_unlisted_person_is_refused_and_nothing_changes(reset_db, tmp_path, dsn):
     client = _app(tmp_path, dsn, roster={"confirm": ["cfo@example"]})
     d = client.app.state.drivers
-    before = len(d.kernel.list_proposals()["proposals"])
+    before = len(d.kernel.list_proposals()["data"])
 
     res = client.post(f"{BASE}/bad-debts/{PERIOD}/accrue", headers=_h("intern@example"))
     assert res.status_code == 403, res.text
@@ -103,7 +103,7 @@ def test_unlisted_person_is_refused_and_nothing_changes(reset_db, tmp_path, dsn)
     assert err["detail"]["configured"] is True
     assert err["detail"]["grant"] == "finance.write"
     assert "intern@example" in err["message"]
-    assert len(d.kernel.list_proposals()["proposals"]) == before   # 零副作用
+    assert len(d.kernel.list_proposals()["data"]) == before   # 零副作用
 
 
 def test_close_period_by_unlisted_person_leaves_it_open(reset_db, tmp_path, dsn):

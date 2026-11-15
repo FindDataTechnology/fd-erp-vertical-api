@@ -58,7 +58,7 @@ def _post(client, ref, lines, when="2026-11-10") -> None:
     kernel.submit_proposal(ref, lines, source_ref=ref, kind="journal",
                            lane_title=ref, submitted_by="cfo@example",
                            booked_on=when)
-    for prop in kernel.list_proposals(status="pending")["proposals"]:
+    for prop in kernel.list_proposals(status="pending")["data"]:
         kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo@example")
 
 
@@ -80,7 +80,7 @@ def _cash_month(client) -> None:
 
 
 def _pending(d) -> int:
-    return len(d.kernel.list_proposals(status="pending")["proposals"])
+    return len(d.kernel.list_proposals(status="pending")["data"])
 
 
 # ---- 1) 两法互证 ----

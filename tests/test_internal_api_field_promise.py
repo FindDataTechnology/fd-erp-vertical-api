@@ -175,7 +175,7 @@ def _app(tmp_path, dsn):
 
 
 def _confirm_all(kernel) -> int:
-    pending = kernel.list_proposals(status="pending")["proposals"]
+    pending = kernel.list_proposals(status="pending")["data"]
     for prop in pending:
         kernel.confirm_proposal(proposal_id=prop["id"], confirmed_by="cfo@example")
     return len(pending)
@@ -332,7 +332,7 @@ def test_all_promised_fields_are_present(ledger):
     而这里要的是**一张完整的缺口清单**，不是第一个红点。
     """
     client, txn = ledger
-    proposal_id = str(client.app.state.kernel.list_proposals()["proposals"][0]["id"])
+    proposal_id = str(client.app.state.kernel.list_proposals()["data"][0]["id"])
     promises = _promises()
     problems: list[str] = []
     for path, declared in promises.items():

@@ -65,8 +65,16 @@ class InProcessKernelClient:
         proposals = self._kernel_mod("proposals")
         with self._connection() as conn:
             rows = proposals.list_proposals(conn, self._tenant, status)
-            return {"proposals": rows[offset:offset + limit],
-                    "rows_returned": len(rows)}
+            # **信封必须与真生产者（MCP 工具面）逐键同形**（2026-11-15 事故的第三层）。
+            # 内核 `result.paginate()` 给的是 `{data,total,offset,limit,rows_returned,
+            # truncated}`，而本替身原先返回 `{"proposals": …}` —— 形状不同的替身会让
+            # 「api 按错的键名读」在所有单测里都绿，只有打到真内核才 500。改信封为目标
+            # 契约，任何再按 `proposals` 读的代码会当场在单测里红。
+            window = rows[offset:offset + limit] if limit else rows[offset:]
+            return {"ok": True, "data": window, "total": len(rows),
+                    "offset": offset, "limit": limit,
+                    "rows_returned": len(window),
+                    "truncated": offset + len(window) < len(rows)}
 
     def confirm_proposal(self, proposal_id=None, stable_id=None, tenant_id=None,
                          confirmed_by="human"):
@@ -374,6 +382,26 @@ def _raise_kernel_error(exc: Exception, action: str):
                        f"内核不可达（{type(exc).__name__}）",
                        detail={"kernel": "erp-ledger", "action": action}) from exc
     raise exc
+
+
+def proposal_rows(out: Any) -> list:
+    """从内核 `list_proposals` 的信封里取行。
+
+    **真生产者的键是 `data`**（内核 `result.paginate()` 的契约：`{data,total,offset,
+    limit,rows_returned,truncated}`），不是 `proposals`。2026-11-15 实跑才暴露：api 原先
+    按 `["proposals"]` 硬取 ⇒ `KeyError` → 500；`statements.py` 用 `.get("proposals")`
+    则长期**静默空**（对账单状态永远解析不到，看起来像「没有提案」）。两者在用
+    `InProcessKernelClient` 的单测里都绿，因为替身自己造了 `{"proposals": …}` —— 替身与
+    真生产者形状不同，是最容易长期藏住的一类。
+
+    这里同时接受 `proposals`：滚动期间旧内核镜像（若有）仍在跑时不至于 500。
+    """
+    if not isinstance(out, dict):
+        return []
+    rows = out.get("data")
+    if rows is None:
+        rows = out.get("proposals")
+    return list(rows or [])
 
 
 def _kernel_result(out: Any, action: str) -> Any:

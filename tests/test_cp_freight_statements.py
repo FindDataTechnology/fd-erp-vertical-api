@@ -110,7 +110,7 @@ def test_confirm_records_self_balancing_proposal_then_conflict(client_faces, bil
     assert out["confirmedBy"] == "cp:CARRIER-A"
 
     # 自平：提案借贷同额（净额为零，不动任何余额），科目在机器车道白名单内
-    detail = d.kernel.list_proposals(status="pending")["proposals"]
+    detail = d.kernel.list_proposals(status="pending")["data"]
     hit = next(p for p in detail if p["id"] == out["proposalId"])
     assert hit["lane_target"] == "diff:freight_statement_confirmed"
     assert "statement:" + sid in hit["source_ref"]

@@ -40,6 +40,7 @@ from .drivers import Drivers, stock_on_hand
 from .envelope import list_shell, ok_shell, parse_page_params
 from .errors import ApiError, invoice_degraded
 from .errors import ApiError
+from .kernel_client import proposal_rows
 from .pagesets import (PROGRAM_IDENTITIES, FinanceStaff, PagesetAuth,
                        load_finance_staff, require_finance_staff,
                        require_grant)
@@ -1507,12 +1508,12 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth,
                            ctx: dict = Depends(fi_route("finance.read"))):
         """提案收件箱：默认全部状态，`status` 可收窄到 pending/confirmed/rejected。"""
         status = request.query_params.get("status")
-        return ok_shell(d.kernel.list_proposals(status=status)["proposals"])
+        return ok_shell(proposal_rows(d.kernel.list_proposals(status=status)))
 
     @app.get("/erp/supply-chain/v1/fi/proposals/{proposal_id}")
     async def fi_proposal(request: Request, proposal_id: int,
                           ctx: dict = Depends(fi_route("finance.read"))):
-        rows = d.kernel.list_proposals()["proposals"]
+        rows = proposal_rows(d.kernel.list_proposals())
         hit = next((r for r in rows if int(r.get("id") or 0) == proposal_id), None)
         if hit is None:
             raise ApiError("NOT_FOUND", "提案不存在",
