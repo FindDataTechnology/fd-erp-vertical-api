@@ -492,10 +492,28 @@ class KernelProxy:
 
     def decide_event(self, stable_id, decision, note=None, lane="draft",
                      actor="human"):
-        """拍板：同样必须收口——MCP 形态下内核拒绝会以错误信封**返回**。"""
+        """拍板：同样必须收口——MCP 形态下内核拒绝会以错误信封**返回**。
+
+        **内核 MCP 工具的确认门签名里没有 `lane`/`actor`**（`tools.py`：
+        `decide_event(stable_id, decision, note="")`，内部硬编码
+        `lane="draft", actor="human"`；2026-11-15 实读）。所以这里不再把这两个
+        参数传下去：传下去在 MCP 形态是 `unexpected_keyword_argument` → **500**
+        （生产实历：`/se/invoice-requests/{id}/decide` 每单必 500），在同进程
+        形态却是「收下了」——同一次调用两种传输给出相反结局，正是本轮要消灭的
+        分叉。
+
+        但也不能静默丢弃：调用方要求别的车道/经办时**显式拒绝**。内核工具面按
+        「人工确认」留痕，这里收下一个 `actor="cfo-001"` 再悄悄记成 human，
+        就是往审计台账里写假话。
+        """
+        if lane != "draft" or actor != "human":
+            raise ApiError(
+                "INVALID_ARGUMENT",
+                "确认门只接受 lane=draft / actor=human"
+                "（内核 MCP 工具按人工拍板留痕，不接受自报身份）",
+                detail={"lane": lane, "actor": actor})
         try:
-            out = self._inner.decide_event(stable_id, decision, note=note,
-                                           lane=lane, actor=actor)
+            out = self._inner.decide_event(stable_id, decision, note=note)
         except Exception as exc:  # noqa: BLE001 见 _raise_kernel_error
             _raise_kernel_error(exc, "decide_event")
         return _kernel_result(out, "decide_event")
