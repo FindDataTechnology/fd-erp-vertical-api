@@ -516,6 +516,12 @@ def build_kernel_client(settings: Settings):
             raise ApiError("INVALID_ARGUMENT",
                            "ERP_KERNEL_TRANSPORT=mcp 需设置 ERP_KERNEL_URL")
         from fd_erp_vertical_templates.kernel_client import McpKernelClient
+        # 内核可在数据面 `/mcp` 上挂 bearer 门（`MCP_BEARER_TOKEN` 非空即开）。2026-11-15
+        # 事故：门开了而本进程没配 `ERP_KERNEL_TOKEN` ⇒ 每个碰账本的端点 401 被统一壳
+        # 兜成 `500 INTERNAL: MCPError`，而 `/health`、`/pagesets` 照常 200 ⇒「服务健康」
+        # 与「取不到账本数据」同时成立，静默约 38 小时。这里把钥匙透传下去；为空时
+        # McpKernelClient 一个头都不带（内核没开门的环境行为不变）。
         return ensure_kernel_proxy(
-            McpKernelClient(settings.kernel_url, settings.tenant_id))
+            McpKernelClient(settings.kernel_url, settings.tenant_id,
+                            token=getattr(settings, "kernel_token", None)))
     return ensure_kernel_proxy(InProcessKernelClient(settings))

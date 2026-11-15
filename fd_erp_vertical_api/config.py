@@ -6,6 +6,8 @@
 - ERP_API_DATA_DIR         模板层 JSONL 事件档目录（缺省 ./data）
 - ERP_KERNEL_TRANSPORT     inprocess（缺省）| mcp
 - ERP_KERNEL_URL           transport=mcp 时的内核 MCP 工具面地址
+- ERP_KERNEL_TOKEN         内核 bearer 门的钥匙（与内核 MCP_BEARER_TOKEN 同值）；
+                           内核开了门而这里为空 ⇒ 每个碰账本的端点 401→500
 - ERP_PAGESET_AUTH         页面集授权配置（内联 JSON），优先于文件
 - ERP_PAGESET_AUTH_FILE    页面集授权配置 JSON 文件路径（fail-closed）
 - ERP_FINANCE_STAFF        财务后台任职名单（内联 JSON），优先于文件；
@@ -52,6 +54,8 @@ class Settings:
     data_dir: str = "data"
     kernel_transport: str = "inprocess"  # inprocess | mcp
     kernel_url: str | None = field(default=None, repr=False)
+    #: 内核 bearer 门的钥匙。repr=False 与 kernel_url 同档：它是凭据。
+    kernel_token: str | None = field(default=None, repr=False)
     pageset_auth_json: str | None = field(default=None, repr=False)
     pageset_auth_file: str | None = field(default=None, repr=False)
     finance_staff_json: str | None = field(default=None, repr=False)
@@ -76,6 +80,7 @@ class Settings:
             kernel_transport=(_env("ERP_KERNEL_TRANSPORT", "inprocess")
                               or "inprocess"),
             kernel_url=_env("ERP_KERNEL_URL"),
+            kernel_token=_env("ERP_KERNEL_TOKEN"),
             pageset_auth_json=_env("ERP_PAGESET_AUTH"),
             pageset_auth_file=_env("ERP_PAGESET_AUTH_FILE"),
             finance_staff_json=_env("ERP_FINANCE_STAFF"),
