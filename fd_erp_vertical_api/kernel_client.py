@@ -553,8 +553,49 @@ class KernelProxy:
     def list_periods(self):
         return self._period_call("list_periods", "list_periods")
 
-    def __getattr__(self, name):  # 其余工具面方法透传（不改变既有行为）
-        return getattr(self._inner, name)
+    def __getattr__(self, name):
+        """其余工具面方法：**仍然归一**，不裸透传。
+
+        2026-11-15 生产实测的两条假象都出自「裸透传 `getattr(self._inner, name)`」：
+
+        1. `confirm_proposal(proposal_id=999999999)` 的返回值原样是内核错误信封
+           `{"ok": false, "error": {"code": "NOT_FOUND", …}}`——`proposal_rows()`
+           读真键 `data` 取不到，返回 `[]` ⇒ 页面显示「没有提案」（静默空）。
+        2. `query_credit("未登记客户")` 同样返回信封，消费点取 `available`/`limit`
+           得到 None ⇒ 空额度或 500。
+
+        这正是本类存在的理由（见类 docstring：「不收口就会把『内核拒收』当成功」），
+        而裸透传把这层保护留给了「有没有人记得手写覆盖」——手写了 10 个，剩下 6 个
+        真被调用的方法（list_proposals / query_credit / submit_proposal /
+        reject_proposal / query_object_balance / confirm_proposal）一直在裸奔。
+
+        现在改成**结构式**：`__getattr__` 返回的每个可调用对象都过同一对
+        `_raise_kernel_error` + `_kernel_result`。手写覆盖的方法保持原样（语义相同，
+        只是各自带了更具体的 action 名），而**新增工具天然被覆盖**——不需要谁记得。
+
+        下划线开头的处理分两种，理由不同：
+
+        - `_inner` 与 dunder **不接管**：`__init__` 里 `_inner` 尚未赋值时若接管会无限
+          递归；dunder 则被解释器当协议钩子（`copy`/`pickle` 探 `__getstate__`、
+          `__deepcopy__`），接管等于把内层的协议行为搬到代理身上。
+        - 其余单下划线私有属性**照常镜像内层**（`proxy._s` / `proxy._tenant`）：代理
+          的契约就是「与内层同形」，测试种子数据、运维脚本都在用这条。挡掉它只会让
+          每个新写的用例都得记得穿一层 `._inner`，而那个约定没人会记得。
+        """
+        if name == "_inner" or name.startswith("__"):
+            raise AttributeError(name)
+        attr = getattr(object.__getattribute__(self, "_inner"), name)
+        if not callable(attr):
+            return attr
+
+        def _normalized(*args, **kwargs):
+            try:
+                out = attr(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001 见 _raise_kernel_error
+                _raise_kernel_error(exc, name)
+            return _kernel_result(out, name)
+
+        return _normalized
 
 
 def ensure_kernel_proxy(client):
