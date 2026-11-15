@@ -148,8 +148,15 @@ class InProcessKernelClient:
     # ---- 期间关账（add-period-close）----
     #
     # 关账是内核概念（期间台账、落账闸都在内核库里），模板层不另包一层——那层只会是
-    # 纯转发。生产 MCP 形态尚未开这几个工具，故只在内核同进程形态提供；缺位时由
-    # KernelProxy 报 NOT_WIRED，不伪造成功。
+    # 纯转发。本类走内核模块直调（同进程形态）。
+    #
+    # 2026-11-15 订正：这里原写着「生产 MCP 形态尚未开这几个工具」，**那是错的**——
+    # 内核工具面 33-37 早就全在（`close_period`/`reopen_period`/`period_status`/
+    # `period_report`/`list_periods`），只是模板层的 `McpKernelClient` 一个都没转发，
+    # 于是 MCP 形态下 `/fi/periods` 回 `501 NOT_WIRED`。同进程形态一直是好的，
+    # 所以单测全绿、只有真机现形。已在 templates 补齐五个转发方法（见
+    # `tests/test_kernel_client_period_tools.py`）；`KernelProxy` 的缺位兜底仍保留
+    # （接更旧的内核镜像时如实报未接线，而不是伪造成功）。
 
     def _periods_mod(self):
         return self._kernel_mod("periods")
