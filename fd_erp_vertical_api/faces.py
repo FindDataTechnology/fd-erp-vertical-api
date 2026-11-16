@@ -40,16 +40,21 @@ from .drivers import Drivers, stock_on_hand
 from .envelope import list_shell, ok_shell, parse_page_params
 from .errors import ApiError, invoice_degraded
 from .errors import ApiError
+from .errors import adapt_exception
 from .kernel_client import proposal_rows
 from .pagesets import (PROGRAM_IDENTITIES, FinanceStaff, PagesetAuth,
                        load_finance_staff, require_finance_staff,
                        require_grant)
+
+from fd_erp_vertical_templates.errors import TemplateError
 
 PAGESET_SE = "supply-chain.se"
 PAGESET_SP = "supply-chain.sp"
 PAGESET_CP = "supply-chain.cp"
 #: 内部页集（只在服务端守门，不进 /pagesets 载荷）
 PAGESET_FI = "supply-chain.fi"
+#: 仓管作业的内部页集（同上，不进载荷）——change: add-inventory-operations-lane 任务 3.1
+PAGESET_WH = "supply-chain.wh"
 
 STAFF_HEADER = "X-ERP-Staff"
 SUPPLIER_HEADER = "X-ERP-Supplier"
@@ -2183,3 +2188,368 @@ def register_fi_face(app, settings, d: Drivers, auth: PagesetAuth,
         """出调汇提案（科目 ↔ `6603`，借贷必平）。**不直接落账**：过确认门才成为事实。"""
         return ok_shell(d.fx_revaluation.revalue(period,
                                                  submitted_by=_human(ctx["staff"])))
+
+
+# ---- WH 仓管作业（内部页集 supply-chain.wh：不进 /pagesets 载荷）----
+#
+# change: add-inventory-operations-lane 任务 3.1/3.2。为什么走**内部**页集而不是新开
+# 一个对外页集，见 `pagesets.INTERNAL_PAGESET_KEYS` 的注释：对外页集 key 与 grant 是
+# 封闭集、镜像在 paas 客户端注册表里，多吐一个不认识的 key 会让客户端整体 fail-closed，
+# 连带四个业务页集一起打掉；而仓管作业又不属于 UE/SE/SP/CP 任何一个角色。
+#
+# 三条口径（决定这一面怎么写，别按「像别的面那样」改）：
+#
+# 1. **提交只落拟稿事实**：`receive/issue/transfer/stocktake` 走内核拟稿车道落 pending，
+#    不投影、不过账。投影与过账只发生在 `POST /wh/documents/{ref}/confirm`，而那是独立
+#    权限档（`inventory.confirm`）——「能开一张单」与「能让这批货成为账面事实」是两件事，
+#    后者动的是对象余额。
+# 2. **闸序不能换**：页集 → grant → 身份头。与 fi 的差异是**不做人员名单**：仓管有数据
+#    范围（仓库来自请求体/查询串），越权由仓库维度的合理缺省兜住；但身份头仍必填，
+#    它要进 `requested_by` 留痕，共用 `X-ERP-Staff` 会让留痕指向错误的席位。
+# 3. **不回写外部 WMS**：本面只记录我方收下的作业事实；外部库存台账仍归 WMS（边界写在
+#    `erp-vertical-supply-chain` 的「仓配与交付编排（执行在外部）」那条需求里）。
+
+#: 仓管经办人身份头（与 `X-ERP-Staff` 分开，见上面第 2 条）
+WAREHOUSE_HEADER = "X-ERP-Warehouse"
+
+
+def register_wh_face(app, settings, d: Drivers, auth: PagesetAuth) -> None:
+    """库存作业面：入库 / 出库 / 调拨 / 盘点的提交与查询（11 个端点）。
+
+    行级状态（GET 单张）读**内核 draft 车道的当前状态**，不拿提交时的快照充数：
+    拍板之后事件状态会变，而文档档里那一行不会跟着变——用快照报「待确认」就是在报告
+    一件已经变了的事。读不到内核时如实标 `unknown` 并在响应里点名，不猜。
+    """
+
+    def wh_route(grant: str):
+        def _dep(request: Request) -> dict[str, Any]:
+            request.state.erp_grant = grant
+            require_grant(auth, PAGESET_WH, grant)
+            who = request.headers.get(WAREHOUSE_HEADER, "").strip()
+            if not who:
+                raise ApiError(
+                    "AUTH_REQUIRED",
+                    f"缺少仓管身份头 {WAREHOUSE_HEADER}"
+                    "（WH 身份=仓管员工号；租户头是常量，不能单独当凭据）")
+            # 程序身份先拒（不靠名单）：REST 面只接人工经办。将来要接自动化，
+            # 得先有服务账号机制（独立凭据 + 独立审计），而不是把引擎名写进人的头。
+            if who.lower() in PROGRAM_IDENTITIES:
+                raise ApiError(
+                    "INVALID_ARGUMENT",
+                    f"须人工经办：{who} 不得代表仓管操作"
+                    "（REST 面只接人工；自动化需服务账号机制，不复用人的身份头）",
+                    detail={"provided": who,
+                            "program_identities": sorted(PROGRAM_IDENTITIES)})
+            return {"operator": who}
+        return _dep
+
+    def _lane(fn, *a, **kw):
+        """车道调用：模板层错误归一成 ApiError（保留 code/message/detail）。"""
+        try:
+            return fn(*a, **kw)
+        except TemplateError as exc:
+            raise adapt_exception(exc) from exc
+
+    def _payload(body: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+        return {k: body[k] for k in keys if body.get(k) not in (None, "")}
+
+    def _list(request: Request, kind: str) -> dict[str, Any]:
+        q = request.query_params
+        offset, limit = parse_page_params(q.get("offset"), q.get("limit"))
+        out = _lane(d.inventory.documents, kind=kind,
+                    status=(q.get("status") or "").strip() or None)
+        return list_shell(out["rows"], offset=offset, limit=limit,
+                          extra={"total": out["total"], "kind": kind,
+                                 "caliber_note": (
+                                     "单据来自本板块作业档；数量面余额以 "
+                                     "query_object_balance 为唯一出处"
+                                     "（不是外部 WMS 实时库存）")})
+
+    # ---- 1) 入库单（goods_received；可不挂采购单）----
+
+    @app.post("/erp/supply-chain/v1/wh/receipts")
+    async def wh_create_receipt(body: dict[str, Any],
+                                ctx: dict = Depends(wh_route("inventory.write"))):
+        """提交入库单：逐行落 `goods_received` **拟稿**事实（pending，不投影）。"""
+        return ok_shell(_lane(
+            d.inventory.receive,
+            warehouse=str(body.get("warehouse") or ""),
+            lines=body.get("lines") or body.get("items") or [],
+            ref=body.get("ref") or None,
+            occurred_at=body.get("occurredAt") or body.get("occurred_at") or None,
+            requested_by=ctx["operator"],
+            note=body.get("note") or None))
+
+    @app.get("/erp/supply-chain/v1/wh/receipts")
+    async def wh_list_receipts(request: Request,
+                               ctx: dict = Depends(wh_route("inventory.read"))):
+        """入库单列表（按发生时间倒序口径由车道给，本层只分页，不重排）。"""
+        return _list(request, "receipt")
+
+    # ---- 2) 出库单（goods_issued；先整单核量，不足一行都不写）----
+
+    @app.post("/erp/supply-chain/v1/wh/issues")
+    async def wh_create_issue(body: dict[str, Any],
+                              ctx: dict = Depends(wh_route("inventory.write"))):
+        """提交出库单：按（sku, 仓库, 批次）核可用量，不足**整单拒绝**并点名行号。"""
+        return ok_shell(_lane(
+            d.inventory.issue,
+            warehouse=str(body.get("warehouse") or ""),
+            lines=body.get("lines") or body.get("items") or [],
+            ref=body.get("ref") or None,
+            occurred_at=body.get("occurredAt") or body.get("occurred_at") or None,
+            requested_by=ctx["operator"],
+            note=body.get("note") or None))
+
+    @app.get("/erp/supply-chain/v1/wh/issues")
+    async def wh_list_issues(request: Request,
+                             ctx: dict = Depends(wh_route("inventory.read"))):
+        return _list(request, "issue")
+
+    # ---- 3) 调拨单（源仓 goods_issued + 目的仓 goods_received 两笔事实）----
+
+    @app.post("/erp/supply-chain/v1/wh/transfers")
+    async def wh_create_transfer(body: dict[str, Any],
+                                 ctx: dict = Depends(wh_route("inventory.write"))):
+        """提交调拨单：同单两笔事实（数量守恒）；同仓调拨按参数错误拒。"""
+        return ok_shell(_lane(
+            d.inventory.transfer,
+            from_warehouse=str(body.get("fromWarehouse")
+                               or body.get("from_warehouse") or ""),
+            to_warehouse=str(body.get("toWarehouse")
+                             or body.get("to_warehouse") or ""),
+            lines=body.get("lines") or body.get("items") or [],
+            ref=body.get("ref") or None,
+            occurred_at=body.get("occurredAt") or body.get("occurred_at") or None,
+            requested_by=ctx["operator"],
+            note=body.get("note") or None))
+
+    @app.get("/erp/supply-chain/v1/wh/transfers")
+    async def wh_list_transfers(request: Request,
+                                ctx: dict = Depends(wh_route("inventory.read"))):
+        return _list(request, "transfer")
+
+    # ---- 4) 盘点单（只对差异行出 goods_adjusted；账面数读本板块数量面）----
+
+    @app.post("/erp/supply-chain/v1/wh/stocktakes")
+    async def wh_create_stocktake(body: dict[str, Any],
+                                  ctx: dict = Depends(wh_route("inventory.write"))):
+        """提交盘点单：盘盈/盘亏各出一笔事实，**无差异不出事实**。"""
+        return ok_shell(_lane(
+            d.inventory.stocktake,
+            warehouse=str(body.get("warehouse") or ""),
+            counts=body.get("counts") or body.get("lines") or [],
+            ref=body.get("ref") or None,
+            occurred_at=body.get("occurredAt") or body.get("occurred_at") or None,
+            requested_by=ctx["operator"],
+            note=body.get("note") or None))
+
+    @app.get("/erp/supply-chain/v1/wh/stocktakes")
+    async def wh_list_stocktakes(request: Request,
+                                 ctx: dict = Depends(wh_route("inventory.read"))):
+        return _list(request, "stocktake")
+
+    # ---- 5) 单张详情：逐行状态 + 调拨的「半边已确认」----
+
+    #: 内核 `query_events` 真正用的返回键是 **`items`**（`{items, completeness}`）。
+    #: `events`/`data`/`rows` 是历史包法与替身用过的写法，一并认：**一个键名认错，
+    #: 整面就会把「已确认」读成「不存在」**——这类错不报错、只报假状态，而单据本身
+    #: 读得到（200），现场看起来像「内核里没有这些事实」。同一条坑在
+    #: `fd_erp_vertical_templates/cost.py` 记过一次（只认 `events`/`data` ⇒ 对着真内核
+    #: 永远看不见任何事件，而单测替身恰好返回 `events`，假绿了整整一轮）。
+    _EVENT_ROW_KEYS = ("items", "events", "data", "rows")
+
+    def _event_rows(out: Any) -> list[dict[str, Any]]:
+        """从内核查询返回里取行（宽容读键，只认列表形态，不猜标量）。"""
+        if isinstance(out, list):
+            return [r for r in out if isinstance(r, dict)]
+        if not isinstance(out, dict):
+            return []
+        for key in _EVENT_ROW_KEYS:
+            rows = out.get(key)
+            if isinstance(rows, list):
+                return [r for r in rows if isinstance(r, dict)]
+        return []
+
+    def _status_of(doc_lines: list[dict[str, Any]]) -> tuple[dict[str, str], str | None]:
+        """按 `stable_id` 问内核 draft 车道的**当前**状态。
+
+        返回 (stable_id → status, 读不到时的原因)。读不到就整批标 `unknown`：
+        一条「不知道」比一条猜出来的「accepted」安全——后者会让人以为货已经入账。
+        """
+        wanted = {str(x.get("stable_id") or "") for x in doc_lines}
+        by_event_type: dict[str, set[str]] = {}
+        for x in doc_lines:
+            et = str(x.get("event_type") or "")
+            if et:
+                by_event_type.setdefault(et, set()).add(str(x.get("stable_id") or ""))
+        found: dict[str, str] = {}
+        try:
+            for et in sorted(by_event_type):
+                out = d.kernel.query_events(event_type=et, lane="draft", limit=500)
+                for row in _event_rows(out):
+                    sid = str(row.get("stable_id") or "")
+                    if sid in wanted:
+                        found[sid] = str(row.get("status") or "")
+        except Exception as exc:  # noqa: BLE001 — 内核不可达/协议变动都归「读不到」
+            return {}, f"{type(exc).__name__}: {exc}"
+        return found, None
+
+    @app.get("/erp/supply-chain/v1/wh/documents/{ref}")
+    async def wh_document(ref: str, ctx: dict = Depends(wh_route("inventory.read"))):
+        """单张单据：逐行**当前**状态 + 按侧汇总（调拨要能看见「只有一边确认了」）。"""
+        doc = _lane(d.inventory.document, ref)
+        lines = doc.get("lines") or []
+        status, why = _status_of(lines)
+        rows: list[dict[str, Any]] = []
+        sides: dict[str, dict[str, Any]] = {}
+        for item in lines:
+            sid = str(item.get("stable_id") or "")
+            st = status.get(sid) or ("unknown" if why else "not_found")
+            row = {**item,
+                   "event_status_submitted": item.get("event_status"),
+                   "event_status": st}
+            rows.append(row)
+            side = str(item.get("side") or "")
+            if not side:
+                continue
+            bucket = sides.setdefault(side, {"lines": 0, "pending": 0, "accepted": 0,
+                                             "rejected": 0, "unknown": 0,
+                                             "statuses": []})
+            bucket["lines"] += 1
+            if st in ("pending", "accepted", "rejected"):
+                bucket[st] += 1
+            else:
+                bucket["unknown"] += 1
+            if st not in bucket["statuses"]:
+                bucket["statuses"].append(st)
+        for bucket in sides.values():
+            bucket["statuses"] = sorted(bucket["statuses"])
+            bucket["settled"] = bucket["pending"] == 0 and bucket["unknown"] == 0
+        # 半边已确认：至少一侧全部定案、而另一侧仍有待确认
+        half = (len(sides) > 1
+                and any(b["settled"] for b in sides.values())
+                and any(not b["settled"] for b in sides.values()))
+        out = {**doc, "lines": rows, "sides": sides, "halfConfirmed": half}
+        if why:
+            out["status_source"] = (f"内核 draft 车道读不到（{why}）——逐行状态标 unknown，"
+                                    "不要据此判断是否已确认")
+        else:
+            out["status_source"] = "内核 draft 车道当前状态（不是提交时的快照）"
+        return ok_shell(out)
+
+    # ---- 6) 拍板：过确认门 + 投影 + 过账（独立权限档）----
+
+    @app.post("/erp/supply-chain/v1/wh/documents/{ref}/confirm")
+    async def wh_confirm(ref: str, body: dict[str, Any],
+                         ctx: dict = Depends(wh_route("inventory.confirm"))):
+        """逐行过确认门，再统一投影与过账。
+
+        **逐行**拍板、**逐行**报错：某一行被内核拒（例如数量与维度不符）时其余行照常
+        推进，响应里那一行标 `ok: false` 并带内核码——不留「整单都成功」的假象。
+        投影只认 accepted 的事实，所以顺序必须是「先全部拍板、再 project」。
+
+        可只拍**一侧**（`side=out|in`）或**一行**（`line=N`）：调拨是两笔事实，某侧失败
+        时另一侧不该被重放（`project()` 的 `line`/`side` 正是为此存在）。**筛过的时候
+        不 finalize**——只看半边就宣布整单 `confirmed` 会造出一张「已确认」却仍有
+        pending 行的单据。
+
+        **`actor` 只能是 `human`**：内核确认门不接受自报身份（`KernelProxy.decide_event`
+        会直接拒掉别的 lane/actor），经办人身份留在本层——响应里的 `operator` 与访问日志，
+        不写进内核事件。这不是遗漏，是「机器不得代替人拍板」那条纪律的实现面。
+        """
+        doc = _lane(d.inventory.document, ref)
+        if str(doc.get("status")) == "rejected":
+            raise ApiError("WORKFLOW_STATE",
+                           f"单据已被驳回（{ref}），不可再确认",
+                           detail={"ref": ref, "status": doc.get("status")})
+        note = str(body.get("note") or "").strip() or None
+        want_side = str(body.get("side") or "").strip() or None
+        want_line = body.get("line")
+        if want_line is not None:
+            try:
+                want_line = int(want_line)
+            except (TypeError, ValueError) as exc:
+                raise ApiError("INVALID_ARGUMENT",
+                               f"line 必须为整数：{body.get('line')}") from exc
+        narrowed = bool(want_side or want_line is not None)
+        decided: list[dict[str, Any]] = []
+        for item in doc.get("lines") or []:
+            if want_side and str(item.get("side") or "") != want_side:
+                continue
+            if want_line is not None and int(item.get("line") or 0) != want_line:
+                continue
+            sid = str(item.get("stable_id") or "")
+            base = {"line": item.get("line"), "side": item.get("side") or "",
+                    "stable_id": sid}
+            if str(item.get("event_status")) == "accepted":
+                # 幂等：已 accepted 的行走同一条路（decide 是幂等的，这里只是省一次往返）
+                decided.append({**base, "ok": True, "status": "accepted",
+                                "note": "提交时即 accepted（内核直通）"})
+                continue
+            try:
+                out = d.kernel.decide_event(sid, "accepted", note=note,
+                                            lane="draft", actor="human")
+            except ApiError as exc:
+                decided.append({**base, "ok": False, "code": exc.code,
+                                "message": exc.message})
+                continue
+            decided.append({**base, "ok": True,
+                            "status": (out or {}).get("status") or "accepted",
+                            "decided_at": (out or {}).get("decided_at")})
+        projected = _lane(d.inventory.project, ref, line=want_line,
+                          side=want_side, settled_by=ctx["operator"],
+                          finalize=not narrowed)
+        rejected_lines = [d0 for d0 in decided if not d0.get("ok")]
+        return ok_shell({
+            "ref": ref,
+            "operator": ctx["operator"],
+            "decided": decided,
+            "decidedOk": len(decided) - len(rejected_lines),
+            "decidedFailed": len(rejected_lines),
+            "scope": {"side": want_side, "line": want_line,
+                      "narrowed": narrowed,
+                      "finalized": not narrowed},
+            "project": projected,
+            "note": ("先逐行过确认门、再投影：被拒的行不会拉平其余行；"
+                     "缺过账规则的行在 project.lines[] 里是 posted=false + "
+                     "posting_reason，不当成已入账"
+                     + ("；本次只拍了筛选出来的那些行，整单状态不推进"
+                        if narrowed else "")),
+        })
+
+    @app.post("/erp/supply-chain/v1/wh/documents/{ref}/reject")
+    async def wh_reject(ref: str, body: dict[str, Any],
+                        ctx: dict = Depends(wh_route("inventory.confirm"))):
+        """驳回单据：内核侧逐行 rejected，本地单据状态转 rejected（原因必填）。"""
+        reason = str(body.get("reason") or "").strip()
+        if not reason:
+            raise ApiError("INVALID_ARGUMENT",
+                           "驳回必须写明原因（reason）——后续要据此查为什么没入账")
+        doc = _lane(d.inventory.document, ref)
+        rejected: list[dict[str, Any]] = []
+        for item in doc.get("lines") or []:
+            sid = str(item.get("stable_id") or "")
+            base = {"line": item.get("line"), "side": item.get("side") or "",
+                    "stable_id": sid}
+            try:
+                # 同上：内核确认门不接受自报经办人，actor 固定 human
+                out = d.kernel.decide_event(sid, "rejected", note=reason,
+                                            lane="draft", actor="human")
+            except ApiError as exc:
+                rejected.append({**base, "ok": False, "code": exc.code,
+                                 "message": exc.message})
+                continue
+            rejected.append({**base, "ok": True,
+                             "status": (out or {}).get("status") or "rejected"})
+        local = _lane(d.inventory.reject, ref, reason=reason,
+                      decided_by=ctx["operator"])
+        failed = [r for r in rejected if not r.get("ok")]
+        return ok_shell({"ref": ref, "operator": ctx["operator"],
+                         "rejected": rejected,
+                         "rejectedOk": len(rejected) - len(failed),
+                         "rejectedFailed": len(failed),
+                         "document": local,
+                         "note": ("内核侧 rejected 与本地单据状态是两件事："
+                                  "本地拒绝不改事件，事件由确认门拒绝")})
+

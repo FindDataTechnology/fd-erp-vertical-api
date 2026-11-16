@@ -34,8 +34,17 @@ PUBLISHED_PAGESET_KEYS: tuple[str, ...] = (
 #: **内部**页集 key：只用于服务端端点闸，**绝不进 /pagesets 载荷**。
 #: 存在的理由：公司自己的财报属于财务后台（桌面/工具），不属于客户订货小程序；
 #: 但它同样需要「页集授权 + grant + 身份头」三件齐备，而不是只凭租户头裸开。
+#:
+#: `supply-chain.wh`（2026-11-16，change: add-inventory-operations-lane 任务 3.1）同族：
+#: 仓管作业不属于四个对外角色中的任何一个——UE 是客户、SE 是业务员、SP 是供应商、
+#: CP 是承运商，把「按仓收发货与盘点」套上其中任何一个都是错的人。走内部页集而不是
+#: 新开对外页集，是因为对外页集 key 与 grant 是**封闭集**，镜像在
+#: `paas/miniapp/src/pagesets/registry.ts`：多吐一个客户端不认识的 key，客户端
+#: `parsePagesetAuth` 会整包作废（连带四个业务页集一起打掉）。内部页集只在服务端守门、
+#: 不进载荷，所以这条车道不必改 paas 那棵树，也不动客户端契约。
 INTERNAL_PAGESET_KEYS: tuple[str, ...] = (
     "supply-chain.fi",
+    "supply-chain.wh",
 )
 
 #: 契约锚：与 paas 客户端 `KNOWN_KEYS` **一字不差**（`tests/test_authz_contract.py` 逐项对拍）。
@@ -74,6 +83,13 @@ INTERNAL_GRANTS: frozenset[str] = frozenset({
     # FI 财务后台：确认/退回提案（拍板）。读与写都 MUST NOT 覆盖它——
     # 「能登记一张票」与「能让这笔分录成为事实」是两件事，后者是账本不可逆的一步。
     "finance.confirm",
+    # WH 仓管作业（supply-chain.wh）：看单据与余额（数量面唯一出处）
+    "inventory.read",
+    # WH 仓管作业：提交入库/出库/调拨/盘点单（落**拟稿**事实，不投影、不过账）
+    "inventory.write",
+    # WH 仓管作业：拍板（过确认门 + 投影 + 过账）。读与写都 MUST NOT 覆盖它——
+    # 「能开一张单」与「能让这批货成为账面事实」是两件事，后者动的是对象余额。
+    "inventory.confirm",
 })
 
 #: 服务端实际接受的全部 grant 码（契约锚 + 内部）；授权配置按这一层收敛。

@@ -182,6 +182,43 @@ WS 事件面（订单状态推送/确认门回执）属底座通道接入，随 
 **四面合计（契约 59 条）：实现 51/59；501 如实 8/59**（SE 推送 1 + SP 对账/发票/
 结算 6 + CP 月台时段 1），全部带 `planned_lane`，禁止假实现。
 
+## 端点覆盖（WH 仓管作业，**内部页集** `supply-chain.wh`，契约 11 条）
+
+这是**内部页集**，不是第五个对外页面集：仓管（收货/发货/调拨/盘点）不属于四个对外角色中的
+任何一个——UE 是客户、SE 是业务员、SP 是供应商、CP 是承运商，套上任何一个人都是错的人。
+它不进 `GET /pagesets` 载荷（客户端 `parsePagesetAuth` 遇到不认识的 key 会整包作废，连带把
+四个业务页集一起打掉），也没有面向客户的页面，所以**没有 `pages[].apis`**。契约声明在
+`INTERNAL-WH-API.md`（与 fi 的 `INTERNAL-API.md` 分文件：那份的字段承诺闸按 `fi` 前缀对齐
+OpenAPI 路由）。
+
+| 域 | 端点 | 数据源 | 状态 |
+|---|---|---|---|
+| 入库 | POST/GET /wh/receipts | 内核事件层**拟稿车道**（`goods_received` pending，不投影不过账）；可选 `cost`/`currency`/`po_ref`/`serial` 随事实走 | 实现 |
+| 出库 | POST/GET /wh/issues | 同上（`goods_issued`）；**先整单核可用量**，不足整单拒绝并点名行号与缺口，一行都不写 | 实现 |
+| 调拨 | POST/GET /wh/transfers | 同单**两笔**事实（源仓 `goods_issued` + 目的仓 `goods_received`，数量守恒）；同仓调拨按参数错误拒 | 实现 |
+| 盘点 | POST/GET /wh/stocktakes | 只对**有差异**的行出 `goods_adjusted`（盘盈正、盘亏负）；账面数读本板块余额，**不接受调用方递来的账面数** | 实现 |
+| 单据读面 | GET /wh/documents/{ref} | 逐行**当前**状态（内核 draft 车道，不是提交时快照）+ 按侧汇总 `sides` + `halfConfirmed` | 实现 |
+| 拍板 | POST /wh/documents/{ref}/confirm | 逐行过确认门 → `project`（投影+过账）。可只拍一侧/一行，此时 `finalize:false` **整单状态不推进** | 实现 |
+| 驳回 | POST /wh/documents/{ref}/reject | 内核逐行 `rejected` + 本地单据状态；原因必填 | 实现 |
+
+计数：**实现 11/11**（无 501）。
+
+**三件与四面不同的口径**（改之前先读 `INTERNAL-WH-API.md` §0）：
+
+1. **三档 grant 分开**：`inventory.read` / `inventory.write` / `inventory.confirm`。
+   「能开一张单」与「能让这批货成为账面事实」是两件事，读权限不覆盖后两档；
+2. **身份头是 `X-ERP-Warehouse`，不共用 `X-ERP-Staff`**：它要进 `requestedBy` 留痕，共用
+   会让留痕指向错误的席位；程序身份一律 400（内核确认门硬编码 `actor="human"`，不接受自报身份）；
+3. **数量面唯一出处是本板块**（`query_object_balance`），**不回写外部 WMS**——外部库存台账
+   仍归 WMS，边界见 `erp-vertical-supply-chain` 的「仓配与交付编排（执行在外部）」。
+
+> **与 `tasks.md` 3.1 的偏差（有意）**：那份写的是 `/ue/inventory/*`。落地改成
+> `/erp/supply-chain/v1/wh/*` + 内部页集，因为 UE 面要求**客户身份头**（`ue_context`
+> 校验 `CUSTOMER_HEADER` 且必须是 customer 实体），而仓管不是客户。走内部页集还顺带
+> 解掉了那条需求自己写明的阻塞：对外页集 key/grant 是封闭集、镜像在 paas 的
+> `registry.ts`，新增对外 key 要改 paas 那棵有数千未提交文件的树；内部页集只在服务端守门、
+> 不进载荷，**零 paas 改动、零客户端契约变更**。
+
 ### 501 未接通面清单（机器可读，禁止手抄）
 
 `planned-surfaces.json` 由 `scripts/planned_surfaces.py` **从源码 AST 派生**（路由装饰器
@@ -193,10 +230,11 @@ python3 scripts/planned_surfaces.py --check    # 与代码比对，零差异才�
 python3 scripts/planned_surfaces.py --write    # 改了 501 面之后回填
 ```
 
-当前 **20 条**（UE 5 + SE 5 + SP 6 + CP 4）。`tasks.md` 3.7 写的「15 个」是**三面**
-（SE/SP/CP）计数，而它的括号里又列了开票/售后（UE 的 5 条）；代码实际集合是 20，
-以本清单为准。判据不含 except 块里的降级 raise（例如内核不可达时的 501 + planned_lane）：
-那说明端点本体有实现，不算未接通面。
+当前 **8 条**（SE 推送 1 + SP 对账/发票/结算 6 + CP 月台时段 1；UE 0）。这个数字只认
+`planned-surfaces.json` 与生成器的输出，**不认文档里的历史数**——本段此前写着「20 条
+（UE 5 + SE 5 + SP 6 + CP 4）」，那是提交时的规划量，后来 12 条真做完了，而文档没人回来改
+（同一次核对里 `check_blocked_endpoints.py` 也报 8 条）。判据不含 except 块里的降级 raise
+（例如内核不可达时的 501 + planned_lane）：那说明端点本体有实现，不算未接通面。
 
 ## 统一响应壳与错误
 
