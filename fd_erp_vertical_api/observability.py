@@ -18,6 +18,12 @@ from typing import Iterable
 from prometheus_client import (CONTENT_TYPE_LATEST, CollectorRegistry, Counter,
                                Histogram, generate_latest)
 
+#: 桶集**只许 import**，不许在本文件手写字面量（change 3.5）：两处 histogram 各自手写时，
+#: 一边多一个 10.0 上界而两边各自都自洽 —— 只有跨服务比才看得出。真源在
+#: `fd-erp/shared/semantics-contract.json` 的 `metrics.canonical`，由
+#: `fd-erp/tools/gen_metrics_buckets.py` 生成；`check_semantics_contract.py` 会拦住手写。
+from ._buckets_generated import SECONDS_BUCKETS
+
 #: 独立注册表：不污染 prometheus_client 的全局默认注册表（测试与多 app 实例友好）
 REGISTRY = CollectorRegistry(auto_describe=True)
 
@@ -38,7 +44,7 @@ LATENCY = Histogram(
     "REST 请求耗时（按路由模板）",
     ["route"],
     registry=REGISTRY,
-    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+    buckets=SECONDS_BUCKETS,
 )
 
 #: 形如 /erp/supply-chain/v1/ue/orders/<任意 id> 的路径段替换成 {id}。
