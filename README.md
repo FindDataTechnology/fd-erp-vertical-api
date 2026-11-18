@@ -1,5 +1,7 @@
 # fd-erp-vertical-api
 
+> **Part of the [Base line (寻数·壹座)](https://www.finddatatech.cloud/products/base) of [FindData](https://www.finddatatech.cloud)** — ERP vertical API — per-industry record schemas and REST surface over the ledger core.
+
 ERP 行业垂直 **REST 服务面**（OpenSpec change `add-supply-chain-vertical` 任务 6.5）：
 UE 订货台 19 + SE 业务员台 15 + SP 供应商 13 + CP 承运商 12 契约端点 +
 pageset 授权端点 + 2 条契约外对账支撑入口（共 63 路由）。契约真源：
