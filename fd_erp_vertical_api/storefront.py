@@ -22,6 +22,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request, Response
 
+from fd_erp_vertical_templates.connectors.checkout import PayPalCheckout
 from fd_erp_vertical_templates.errors import TemplateError
 
 from .config import Settings
@@ -314,3 +315,93 @@ def register_storefront_face(app: FastAPI, settings: Settings,
         except TemplateError as exc:
             raise adapt_exception(exc) from exc
         return ok_shell(out)
+
+    # ---- 在线收款（change establish-ai-native-ecommerce-stack 0.13）----
+    # 商家自有 PayPal（paypal.create_order / capture_order，经连接器运行时）：
+    # 钱进商家授权的 PayPal 账户，平台不经手资金。买家侧凭不透明单号发起——
+    # 与 GET /orders/{order_ref} 同一能力模型。未接商户号 = NOT_WIRED 如实 501，
+    # **不回落任何自建直连**（模板层 payment_direct_call_gate 守主机名）。
+    #: seam: 测试注入假运行时（真链路在无商户号时本就 NOT_WIRED，无法在线实测）
+    def _paypal_checkout():
+        return PayPalCheckout(connection=f"paypal-{settings.tenant_id}")
+
+    def _prepaid_order_payload(d: Drivers, order_ref: str) -> dict[str, Any]:
+        """预付单事实（跨店/B2B 一律 404，不泄露存在性——与订单查询同判据）。"""
+        try:
+            ev = d.orders._latest(order_ref)
+        except TemplateError as exc:
+            raise ApiError("NOT_FOUND", "订单不存在", detail={}) from exc
+        payload = ev.get("payload") or {}
+        if ev.get("record") != "order" or payload.get("settlement_mode") != "prepaid":
+            raise ApiError("NOT_FOUND", "订单不存在", detail={})
+        return payload
+
+    @app.post("/shop/{tenant}/orders/{order_ref}/payment/paypal")
+    async def shop_paypal_create(tenant: str, order_ref: str,
+                                 request: Request):
+        """为预付单创建 PayPal 订单（intent=CAPTURE），返回买家批准链接。
+
+        金额/币种取自订单事实——买家不能自报价。已到账的单拒绝重复发起。
+        """
+        _rate_check(request.client.host if request.client else "unknown")
+        d = shop_context(tenant)
+        payload = _prepaid_order_payload(d, order_ref)
+        if any(e.get("record") == "payment_received"
+               and e.get("order_ref") == order_ref and e.get("status") == "accepted"
+               for e in d.orders._events()):
+            raise ApiError("WORKFLOW_STATE", "订单已到账，无需再次发起收款")
+        try:
+            out = _paypal_checkout().create_order(
+                order_ref=order_ref,
+                amount=str(payload.get("amount_total") or ""),
+                currency=str(payload.get("currency") or settings.base_currency))
+        except TemplateError as exc:
+            raise adapt_exception(exc) from exc
+        return ok_shell({"order_ref": order_ref,
+                         "paypal_order_id": out["paypal_order_id"],
+                         "status": out["status"],
+                         "approve_url": out["approve_url"],
+                         "note": "钱进商家自有 PayPal 账户；买家批准后调 capture 完成收款"})
+
+    @app.post("/shop/{tenant}/orders/{order_ref}/payment/paypal/capture")
+    async def shop_paypal_capture(tenant: str, order_ref: str,
+                                  body: dict[str, Any], request: Request):
+        """捕获已批准的 PayPal 订单；捕获完成即登记到账事实（与人工登记同车道）。
+
+        幂等键 = PayPal capture id：同一笔捕获重复确认只落一条事实。
+        金额以 PayPal 实收为准回填到账（record_payment_received 自校验金额合法性）。
+        """
+        _rate_check(request.client.host if request.client else "unknown")
+        d = shop_context(tenant)
+        _prepaid_order_payload(d, order_ref)  # 越店/B2B 一律 404
+        paypal_order_id = str(body.get("paypalOrderId") or "").strip()
+        if not paypal_order_id:
+            raise ApiError("INVALID_ARGUMENT", "须提供批准后的 paypalOrderId",
+                           detail={"missing": "paypalOrderId"})
+        try:
+            cap = _paypal_checkout().capture_order(paypal_order_id=paypal_order_id)
+        except TemplateError as exc:
+            raise adapt_exception(exc) from exc
+        if not cap["completed"] or not cap.get("capture_id"):
+            raise ApiError("PAYMENT_NOT_CONFIRMED",
+                           f"PayPal 捕获未完成（status={cap['status']}）："
+                           "不登记到账、订单停留待付款",
+                           detail={"paypal_order_id": cap["paypal_order_id"],
+                                   "status": cap["status"]})
+        try:
+            rec = d.orders.record_payment_received(
+                order_ref,
+                amount=str(cap.get("amount") or ""),
+                currency=str(cap.get("currency") or settings.base_currency),
+                proof_ref=f"paypal:{cap['capture_id']}",
+                idempotency_key=f"paypal:{cap['capture_id']}",
+                recorded_by="paypal",
+            )
+        except TemplateError as exc:
+            raise adapt_exception(exc) from exc
+        return ok_shell({"order_ref": order_ref,
+                         "paypal_order_id": cap["paypal_order_id"],
+                         "capture_id": cap["capture_id"],
+                         "payment_ref": rec["payment_ref"],
+                         "duplicate": rec.get("duplicate", False),
+                         "payment_state": "received"})

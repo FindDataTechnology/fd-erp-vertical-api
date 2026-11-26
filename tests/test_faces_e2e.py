@@ -153,12 +153,12 @@ def test_se_full_chain(client_faces, seeded_faces):
     assert st["customer_id"] == cust1 and st["amount_total"] == "100"
     sid = st["statement_id"]
 
-    # 推送 → 501（端内消息通道归底座，SE 端不可代拍）
+    # 推送（3.2 落地：经底座端内消息通道；本环境未配置连接器运行时 → 如实
+    # NOT_WIRED 501，不是 NOT_IMPLEMENTED——车道已实现，缺的是部署面接线）
     r = client_faces.post(f"/erp/supply-chain/v1/se/statements/{sid}/push",
-                          headers=_h_se(), json={"channel": "in-app"})
+                          headers=_h_se(), json={"audience": {"kind": "all"}})
     assert r.status_code == 501
-    assert r.json()["error"]["code"] == "NOT_IMPLEMENTED"
-    assert r.json()["error"]["detail"]["planned_lane"]
+    assert r.json()["error"]["code"] == "NOT_WIRED"
 
     # ---- 预警处置：处置任务车道（与 owner 席位同一确认门）----
     d = client_faces.app.state.drivers
@@ -394,15 +394,12 @@ def test_sp_full_chain(client_faces, seeded_faces):
     ws = r.json()["data"]
     assert ws["po_pending_accept"] == 0 and ws["arrival_notices_open"] == 2
 
-    # ---- 对账/发票/结算：契约里有、后端无车道 → 如实 501 ----
+    # ---- 对账/结算：契约里有、具名外部阻塞（金蝶 live 验收）→ 如实 501 ----
     for method, path, payload in (
             ("GET", "/erp/supply-chain/v1/sp/statements", None),
             ("GET", "/erp/supply-chain/v1/sp/statements/ST-X", None),
             ("POST", "/erp/supply-chain/v1/sp/statements/ST-X/confirm",
              {"decision": "confirmed"}),
-            ("POST", "/erp/supply-chain/v1/sp/invoices",
-             {"statementId": "ST-X"}),
-            ("GET", "/erp/supply-chain/v1/sp/invoices", None),
             ("GET", "/erp/supply-chain/v1/sp/settlements", None)):
         r = (client_faces.get(path, headers=_h_sp("SUP-001")) if method == "GET"
              else client_faces.post(path, headers=_h_sp("SUP-001"),
@@ -411,6 +408,19 @@ def test_sp_full_chain(client_faces, seeded_faces):
         err = r.json()["error"]
         assert err["code"] == "NOT_IMPLEMENTED"
         assert err["detail"]["planned_lane"]
+
+    # ---- 发票上传/列表（3.2 落地）：车道已实现；本环境未接连接器运行时
+    #      → 如实 NOT_WIRED（与 NOT_IMPLEMENTED 区分：不是没做，是没接线）----
+    for method, path, payload in (
+            ("POST", "/erp/supply-chain/v1/sp/invoices",
+             {"fileName": "a.pdf", "mime": "application/pdf",
+              "contentBase64": "JVBERi0xLjQK"}),
+            ("GET", "/erp/supply-chain/v1/sp/invoices", None)):
+        r = (client_faces.get(path, headers=_h_sp("SUP-001")) if method == "GET"
+             else client_faces.post(path, headers=_h_sp("SUP-001"),
+                                    json=payload))
+        assert r.status_code == 501, (method, path, r.status_code)
+        assert r.json()["error"]["code"] == "NOT_WIRED"
 
 
 # ==========================================================================

@@ -26,8 +26,11 @@
   到货预告（record_arrival_notice）；
 - CP 承运回执/月台/提货/POD 写交付编排运单同一事件档；异常签收进处置车道；
 - 契约有、编排层无车道的端点如实 501 NOT_IMPLEMENTED + planned_lane（沿 UE
-  既有 5 个 501 先例）：CRM 线索/拜访、对账单推送（SE）、SP 对账/发票/结算、
-  CP 可约月台时段/运费单。
+  既有 5 个 501 先例）：SP 对账/结算（金蝶 live 待验收）、CP 可约月台时段
+  （仓库作业编排未建模月台）。
+- 已由变更 establish-ai-native-ecommerce-stack 3.2 落地的车道（原 501 解除）：
+  SE 对账单推送（经底座端内消息通道 `inapp-notify`，推送留痕在网关广播账本）、
+  SP 发票上传/列表（经中台文件服务 `file-service`；查验/勾兑属具名外部阻塞）。
 """
 from __future__ import annotations
 
@@ -46,6 +49,8 @@ from .pagesets import (PROGRAM_IDENTITIES, FinanceStaff, PagesetAuth,
                        load_finance_staff, require_finance_staff,
                        require_grant)
 
+from fd_erp_vertical_templates.connectors.midplatform import (
+    FileServiceUpload, InappNotify)
 from fd_erp_vertical_templates.errors import TemplateError
 
 PAGESET_SE = "supply-chain.se"
@@ -67,6 +72,35 @@ ORDER_STATUS_NOTE = ("pending=待确认（确认车道）；confirmed=已确认�
 def _not_implemented(message: str, planned_lane: str) -> ApiError:
     return ApiError("NOT_IMPLEMENTED", message,
                     detail={"planned_lane": planned_lane})
+
+
+def _put_presigned(grant: dict[str, Any], data: bytes, filename: str,
+                   mime: str) -> None:
+    """把字节传到文件服务给的预签名地址（PUT 或 POST policy 两种形态）。
+
+    出网只到**我们自己**文件服务签发的存储地址，不是外部厂商直连。
+    模块级（非闭包）是为了可注入替身：测试 monkeypatch 本名即可。
+    """
+    import httpx
+    url = str(grant.get("upload_url") or "")
+    if not url:
+        raise ApiError("UPSTREAM_UNAVAILABLE",
+                       "文件服务未返回上传地址（如实失败，不伪造入库）")
+    method = str(grant.get("method") or "PUT").upper()
+    try:
+        if method == "POST":
+            resp = httpx.post(url, data=grant.get("fields") or None,
+                              files={"file": (filename, data, mime)},
+                              timeout=60.0)
+        else:
+            resp = httpx.put(url, content=data,
+                             headers={"Content-Type": mime}, timeout=60.0)
+    except Exception as exc:  # noqa: BLE001 - 网络层异常统一归因
+        raise ApiError("UPSTREAM_UNAVAILABLE",
+                       "上传到文件服务存储失败（网络不可达）") from exc
+    if resp.status_code >= 400:
+        raise ApiError("UPSTREAM_UNAVAILABLE",
+                       f"上传到文件服务存储失败（{resp.status_code}）")
 
 
 # --------------------------------------------------------------------------
@@ -601,12 +635,47 @@ def register_se_face(app, settings, d: Drivers, kernel,
     async def se_statement_push(statement_id: str, body: dict[str, Any],
                                 ctx: dict = Depends(se_route(
                                     "statement.confirm.proxy"))):
-        raise _not_implemented(
-            "对账单推送后端能力未就绪：端内消息通道归底座通知面（模板层无消息"
-            "车道）；推送须留痕，禁止无车道假实现。客户确认仍走 UE 端确认门，"
-            "SE 端不可代拍",
-            "planned_lane: 底座端内消息通道（notify 车道）接入后实施推送留痕；"
-            "客户确认门=UE /ue/statements/{id}/confirm（内核 proposal 车道）")
+        """对账单推送（establish-ai-native-ecommerce-stack 3.2 落地）。
+
+        经底座端内消息通道（provider `inapp-notify`）发通知：受众由调用方以
+        audience 选择器给出（底座通知面语义 org/role/userIds/all），本端不推断
+        客户与底座账号的对应关系。推送留痕不在这里复制——网关广播账本
+        （id/seq/受众/命中数）是唯一真源。客户确认仍走 UE 端确认门
+        （/ue/statements/{id}/confirm），SE 端不可代拍。
+        """
+        audience = body.get("audience")
+        if not isinstance(audience, dict) or \
+                not str(audience.get("kind") or "").strip():
+            raise ApiError("INVALID_ARGUMENT",
+                           "推送须给 audience 受众选择器"
+                           "（kind=org|role|userIds|all）",
+                           detail={"missing": "audience"})
+        # 域校验：statement 必须属于本业务员名下某个客户（越域一律 404）
+        statement = None
+        for snap in _owned_customers(d, ctx["staff"]):
+            try:
+                statement = statements.get_statement(snap["entity_id"],
+                                                     statement_id)
+                break
+            except ApiError:
+                continue
+        if statement is None:
+            raise ApiError("NOT_FOUND", "对账单不存在", detail={})
+        title = str(body.get("title") or f"对账单 {statement_id} 待确认")
+        text = str(body.get("body") or (
+            f"期间 {statement['period']} 对账单金额 "
+            f"{statement['amount_total']} {statement['currency']}，"
+            f"请在订货台确认"))
+        try:
+            out = InappNotify(connection=f"inapp-notify-{settings.tenant_id}") \
+                .send_broadcast(audience=audience, title=title, body=text)
+        except TemplateError as exc:
+            raise adapt_exception(exc) from exc
+        return ok_shell({"statement_id": statement_id, "pushed": True,
+                         "broadcast_id": out.get("broadcast_id"),
+                         "hit_count": out.get("hit_count"),
+                         "note": "推送留痕在底座网关广播账本（唯一真源）；"
+                                 "客户确认仍走 UE 端确认门，SE 端不可代拍"})
 
     # 契约 §6：AI 助手入口无独立端点（复用底座 chat/WS 面）。
 
@@ -922,15 +991,17 @@ def register_sp_face(app, settings, d: Drivers, kernel,
     # ---- 4) 对账域 —— 后端能力未就绪，如实 501 ----
 
     _SP_STATEMENT_501 = (
-        "应付对账单后端能力未就绪：契约数据源=金蝶 provider 往来面拉取 + 账本"
-        "内核计算（api-contract §4）；金蝶 live 接通属任务 3.1 挂账，采购编排"
-        "单据无金额无日期，无法如实派生对账单 —— 禁止假实现")
+        "应付对账单 501（具名外部阻塞）：数据源=金蝶 provider 往来面拉取 + 账本"
+        "内核计算（api-contract §4）。金蝶 provider 的 catalog+执行器测试已到位"
+        "（任务 3.1），残余阻塞=金蝶 live 验收（需真实金蝶云星空客户实例，属"
+        "connector-live-acceptance 车道）；采购编排单据无金额无日期，无法如实"
+        "派生对账单 —— 禁止假实现")
 
     @app.get("/erp/supply-chain/v1/sp/statements")
     async def sp_statements(ctx: dict = Depends(sp_route("statement.read"))):
         raise _not_implemented(_SP_STATEMENT_501,
-                               "planned_lane: 金蝶 provider 往来面拉取"
-                               "（任务 3.1）→ 账本内核计算应付 → 单据级对账单"
+                               "planned_lane: 金蝶 provider 往来面拉取（live 验收"
+                               "后同一入口可用）→ 账本内核计算应付 → 单据级对账单"
                                "派生 + 确认门（内核自平核对 proposal，同 UE 契约）")
 
     @app.get("/erp/supply-chain/v1/sp/statements/{statement_id}")
@@ -945,34 +1016,95 @@ def register_sp_face(app, settings, d: Drivers, kernel,
                                "planned_lane: 金额同源到位后确认门=内核自平核对"
                                " proposal（超时/失败不假报成功）；异议进处置车道")
 
-    # ---- 5) 发票域 —— 后端能力未就绪，如实 501 ----
+    # ---- 5) 发票域 —— 上传经中台文件服务（3.2 落地）；查验属具名外部阻塞 ----
 
-    _SP_INVOICE_501 = (
-        "发票上传后端能力未就绪：上传件中台文件服务与发票查验/勾兑车道均未接入，"
-        "金蝶连接器回写为 contract-only（docs/connector-onboarding-supply-chain.md"
-        " §1.2）；禁止假实现")
+    _SP_INVOICE_VERIFY_NOTE = (
+        "发票查验/勾兑车道未接入（金蝶连接器回写 contract-only）——"
+        "上传件已落中台文件服务，核验进度如实为 unverified")
+
+    def _invoice_owner() -> str:
+        # owner 是不透明域串（file-service 不解析）：本租户的 SP 发票域
+        return f"erp:{settings.tenant_id}:sp-invoice"
 
     @app.post("/erp/supply-chain/v1/sp/invoices")
     async def sp_invoice_upload(body: dict[str, Any],
                                 ctx: dict = Depends(sp_route("invoice.upload"))):
-        raise _not_implemented(
-            _SP_INVOICE_501,
-            "planned_lane: 中台文件服务上传契约 + 发票查验/勾兑车道 + 金蝶连接器"
-            "回写（contract-only）")
+        """发票影像件上传（establish-ai-native-ecommerce-stack 3.2 落地）。
+
+        载荷 base64 直传（内部面；8 MiB 上限），服务端经文件服务预签名地址
+        落字节后确认入库——返回的 verification 如实为 unverified（查验车道
+        未接入，升级依赖具名外部件）。
+        """
+        import base64
+        import hashlib
+        filename = str(body.get("fileName") or "").strip()
+        mime = str(body.get("mime") or "").strip()
+        b64 = str(body.get("contentBase64") or "")
+        missing = [k for k, v in (("fileName", filename), ("mime", mime),
+                                  ("contentBase64", b64)) if not v]
+        if missing:
+            raise ApiError("INVALID_ARGUMENT", "发票上传缺字段",
+                           detail={"missing": missing})
+        try:
+            data = base64.b64decode(b64, validate=True)
+        except Exception as exc:  # noqa: BLE001
+            raise ApiError("INVALID_ARGUMENT",
+                           "contentBase64 不是合法 base64") from exc
+        if not data:
+            raise ApiError("INVALID_ARGUMENT", "发票文件为空")
+        max_bytes = 8 * 1024 * 1024
+        if len(data) > max_bytes:
+            raise ApiError("INVALID_ARGUMENT",
+                           f"发票文件超过 {max_bytes // (1024 * 1024)} MiB 上限",
+                           detail={"sizeBytes": len(data)})
+        owner = _invoice_owner()
+        lane = FileServiceUpload(connection=f"file-service-{settings.tenant_id}")
+        try:
+            grant = lane.create_upload_url(
+                owner=owner, filename=filename, mime=mime, size=len(data),
+                sha256=hashlib.sha256(data).hexdigest())
+            _put_presigned(grant, data, filename, mime)
+            file_id = str(grant.get("id") or grant.get("file_id") or "")
+            asset = lane.confirm_upload(owner=owner, file_id=file_id)
+        except TemplateError as exc:
+            raise adapt_exception(exc) from exc
+        return ok_shell({
+            "invoice_id": file_id,
+            "fileName": filename, "mime": mime, "sizeBytes": len(data),
+            "dedup": bool(grant.get("dedup")),
+            "asset_state": (asset.get("state") if isinstance(asset, dict)
+                            else None),
+            "verification": {"state": "unverified",
+                             "note": _SP_INVOICE_VERIFY_NOTE}})
 
     @app.get("/erp/supply-chain/v1/sp/invoices")
     async def sp_invoice_list(ctx: dict = Depends(sp_route("invoice.upload"))):
-        raise _not_implemented(_SP_INVOICE_501,
-                               "planned_lane: 同 POST /sp/invoices（上传历史与"
-                               "核验进度 read 面）")
+        """发票上传历史（读面=文件服务本人域列表的同源投影，不建第二份）。"""
+        lane = FileServiceUpload(connection=f"file-service-{settings.tenant_id}")
+        try:
+            items = lane.list_files(owner=_invoice_owner(), limit=100)
+        except TemplateError as exc:
+            raise adapt_exception(exc) from exc
+        rows = [{
+            "invoice_id": it.get("file_id") or it.get("id"),
+            "fileName": it.get("filename") or it.get("fileName"),
+            "mime": it.get("mime") or it.get("contentType"),
+            "sizeBytes": it.get("size") or it.get("sizeBytes"),
+            "uploadedAt": it.get("created_at") or it.get("createdAt"),
+            "verification": {"state": "unverified",
+                             "note": _SP_INVOICE_VERIFY_NOTE},
+        } for it in items]
+        return list_shell(rows, offset=0, limit=len(rows) or 1)
 
     # ---- 6) 结算查询域（只读；零支付操作面）—— 未就绪，如实 501 ----
 
     @app.get("/erp/supply-chain/v1/sp/settlements")
     async def sp_settlements(ctx: dict = Depends(sp_route("statement.read"))):
         raise _not_implemented(
-            "结算进度查询后端能力未就绪：结算与金蝶往来面同源（任务 3.1 挂账）；"
-            "本端零支付操作面（红线 D4：对外付款走金蝶/持牌通道）不变",
+            "结算进度查询 501（具名外部阻塞）：结算与金蝶往来面同源——金蝶 "
+            "provider catalog+执行器测试已到位（任务 3.1），残余阻塞=金蝶 live "
+            "验收（需真实金蝶云星空客户实例）；本端零支付操作面（红线 D4：对外"
+            "付款走金蝶/持牌通道）不变",
             "planned_lane: 金蝶付款/结算回写 read 面（只读，无任何支付/账户操作）")
 
     # 契约 §7：AI 助手入口无独立端点（复用底座 chat/WS 面）。

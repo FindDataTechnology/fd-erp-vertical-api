@@ -139,6 +139,12 @@ ERROR_CATALOG: dict[str, ErrorCodeMeta] = {
         "STAFF_NOT_AUTHORIZED", "invalid_argument", False,
         "调用者不在财务任职名单内（或名单未配置）——财务后台按人授权，需管理员登记。",
         403),
+    # 在线收款（establish-ai-native-ecommerce-stack 0.13）：PayPal 捕获未完成
+    # （买家没批准/已过期/被风控）——如实拒登到账，订单停留待付款（0.12 纪律）。
+    "PAYMENT_NOT_CONFIRMED": ErrorCodeMeta(
+        "PAYMENT_NOT_CONFIRMED", "invalid_argument", False,
+        "收款通道未确认到账（捕获未完成）；订单停留待付款，可重试或改线下确认。",
+        402),
 }
 
 #: 模板层错误码 → HTTP 映射补遗（TemplateError 独有码；语义同 TemplateError.CODES）

@@ -44,6 +44,25 @@
 | POST | `/shop/{tenant}/orders` | 无（预付单不占信用） | 匿名 |
 | GET | `/shop/{tenant}/orders/{order_ref}` | 无（凭不透明单号） | 匿名 |
 | POST | `/shop/{tenant}/orders/{order_ref}/payment` | 无 grant（商家侧动作） | 商家 |
+| POST | `/shop/{tenant}/orders/{order_ref}/payment/paypal` | 无（凭不透明单号发起在线收款） | 匿名 |
+| POST | `/shop/{tenant}/orders/{order_ref}/payment/paypal/capture` | 无（凭不透明单号 + PayPal 批准回执） | 匿名 |
+
+## 2.A 在线收款（商家自有 PayPal，change establish-ai-native-ecommerce-stack 0.13）
+
+- **通道与资金流**：`paypal.create_order`（intent=CAPTURE，出买家批准链接）→ 买家在
+  PayPal 批准 → `capture_order`（捕获）。钱进**商家**在连接器里授权的自有 PayPal
+  账户（BYOK），平台不经手资金、不代收——与到账事实「只记事实、不落分录」同口径。
+- **为什么匿名**：买家凭下单时拿到的不透明单号（`SO-` + 10 位 hex）操作自己那一单，
+  与 `GET /orders/{order_ref}` 同一能力模型；金额/币种一律取自订单事实，买家不能自报价。
+- **未接商户号 = 如实 501**：无真实商户号（连接器运行时未配置 / 商家未授权 PayPal
+  连接）时以 `NOT_WIRED` 失败，**不回落任何自建直连**——模板层
+  `payment_direct_call_gate.py` 把 PayPal API 主机列入支付渠道主机名清单，
+  直连出现即判红。
+- **到账自动登记**：捕获完成（`COMPLETED` + capture id）即调与人工登记同一条
+  `record_payment_received` 车道，`proof_ref`/幂等键 = `paypal:{capture_id}`——
+  同一笔捕获重复确认只落一条事实；捕获未完成（402 `PAYMENT_NOT_CONFIRMED`）
+  不登记到账、订单停留待付款（0.12「未到账不倒流」纪律）。
+- **声明出处**：`establish-ai-native-ecommerce-stack` 任务 0.13（本 change）。
 
 ## 3. 交易协商（匿名 + 委托）
 
